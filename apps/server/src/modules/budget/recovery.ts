@@ -33,6 +33,8 @@ export const UNFUNDED_TERMINAL_STATUSES: TransactionStatus[] = [
 
 export interface SweepResult {
   expired: string[];
+  approvalsExpired: string[];
+  authorizationsExpired: string[];
   reconciled: string[];
   failed: string[];
 }
@@ -94,6 +96,122 @@ export async function expireStuckEvaluations(
         { err, transactionId: candidate.id },
         'failed to expire stuck evaluation',
       );
+    }
+  }
+  return { expired, failed };
+}
+
+/**
+ * Expires purchases whose human approval window has passed (PENDING_APPROVAL
+ * → EXPIRED, approval PENDING → EXPIRED) and releases their funds — exactly
+ * once, even if a user cancels or approves at the same moment.
+ */
+export async function expireOverdueApprovals(
+  db: Database,
+  options: { now?: Date; batchSize?: number; logger?: Logger } = {},
+): Promise<{ expired: string[]; failed: string[] }> {
+  const now = options.now ?? new Date();
+  const candidates = await db.approval.findMany({
+    where: { status: 'PENDING', expiresAt: { lte: now } },
+    select: { transactionId: true, transaction: { select: { userId: true } } },
+    orderBy: { expiresAt: 'asc' },
+    take: options.batchSize ?? 100,
+  });
+  const expired: string[] = [];
+  const failed: string[] = [];
+  for (const c of candidates) {
+    const userId = c.transaction.userId;
+    try {
+      const done = await db.$transaction(async (tx) => {
+        await lockUserBudget(tx, userId);
+        const approval = await tx.approval.updateMany({
+          where: { transactionId: c.transactionId, status: 'PENDING', expiresAt: { lte: now } },
+          data: { status: 'EXPIRED', decidedAt: now },
+        });
+        if (approval.count === 0) return false;
+        await tx.transaction.updateMany({
+          where: { id: c.transactionId, status: 'PENDING_APPROVAL' },
+          data: {
+            status: 'EXPIRED',
+            reasonCodes: { push: 'APPROVAL_EXPIRED' },
+            version: { increment: 1 },
+          },
+        });
+        const { releasedMinor } = await releaseWithinTransaction(tx, {
+          userId,
+          transactionId: c.transactionId,
+          reason: 'approval_expired',
+          actor: { type: 'SYSTEM', id: null },
+        });
+        await appendAuditEvent(tx, {
+          actorType: 'SYSTEM',
+          actorId: null,
+          userId,
+          transactionId: c.transactionId,
+          action: 'purchase.approval_expired',
+          data: { releasedMinor },
+        });
+        return true;
+      });
+      if (done) expired.push(c.transactionId);
+    } catch (err) {
+      failed.push(c.transactionId);
+      options.logger?.error({ err, transactionId: c.transactionId }, 'failed to expire approval');
+    }
+  }
+  return { expired, failed };
+}
+
+/**
+ * Expires AUTHORIZED purchases that were not paid within the authorization
+ * window, and releases their funds.
+ */
+export async function expireOverdueAuthorizations(
+  db: Database,
+  options: { now?: Date; batchSize?: number; logger?: Logger } = {},
+): Promise<{ expired: string[]; failed: string[] }> {
+  const now = options.now ?? new Date();
+  const candidates = await db.transaction.findMany({
+    where: { status: 'AUTHORIZED', authorizationExpiresAt: { lte: now } },
+    select: { id: true, userId: true },
+    orderBy: { authorizationExpiresAt: 'asc' },
+    take: options.batchSize ?? 100,
+  });
+  const expired: string[] = [];
+  const failed: string[] = [];
+  for (const c of candidates) {
+    try {
+      const done = await db.$transaction(async (tx) => {
+        await lockUserBudget(tx, c.userId);
+        const { count } = await tx.transaction.updateMany({
+          where: { id: c.id, status: 'AUTHORIZED', authorizationExpiresAt: { lte: now } },
+          data: {
+            status: 'EXPIRED',
+            reasonCodes: { push: 'AUTHORIZATION_EXPIRED' },
+            version: { increment: 1 },
+          },
+        });
+        if (count === 0) return false;
+        const { releasedMinor } = await releaseWithinTransaction(tx, {
+          userId: c.userId,
+          transactionId: c.id,
+          reason: 'authorization_expired',
+          actor: { type: 'SYSTEM', id: null },
+        });
+        await appendAuditEvent(tx, {
+          actorType: 'SYSTEM',
+          actorId: null,
+          userId: c.userId,
+          transactionId: c.id,
+          action: 'purchase.authorization_expired',
+          data: { releasedMinor },
+        });
+        return true;
+      });
+      if (done) expired.push(c.id);
+    } catch (err) {
+      failed.push(c.id);
+      options.logger?.error({ err, transactionId: c.id }, 'failed to expire authorization');
     }
   }
   return { expired, failed };
@@ -165,13 +283,21 @@ export async function sweepReservations(
     ...(options.now ? { now: options.now } : {}),
     ...(options.logger ? { logger: options.logger } : {}),
   });
+  const shared = {
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.logger ? { logger: options.logger } : {}),
+  };
+  const approvals = await expireOverdueApprovals(db, shared);
+  const authorizations = await expireOverdueAuthorizations(db, shared);
   const reconcile = await reconcileOrphanedReservations(
     db,
     options.logger ? { logger: options.logger } : {},
   );
   return {
     expired: expiry.expired,
+    approvalsExpired: approvals.expired,
+    authorizationsExpired: authorizations.expired,
     reconciled: reconcile.reconciled,
-    failed: [...expiry.failed, ...reconcile.failed],
+    failed: [...expiry.failed, ...approvals.failed, ...authorizations.failed, ...reconcile.failed],
   };
 }

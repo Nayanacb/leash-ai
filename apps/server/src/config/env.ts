@@ -27,6 +27,9 @@ const postgresUrl = z
   .min(1)
   .refine((v) => /^postgres(ql)?:\/\//.test(v), 'must be a postgres:// or postgresql:// URL');
 
+/** Extra time the AI pipeline allows beyond the per-call timeout before giving up on a layer. */
+export const AI_DEADLINE_GRACE_MS = 2_000;
+
 export const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -54,6 +57,13 @@ export const EnvSchema = z
     ANTHROPIC_API_KEY: optionalString,
     LLM_MODEL_POLICY_COMPILER: optionalModelId,
     LLM_MODEL_CLASSIFIER: optionalModelId,
+    /** Per-request timeout for the injection classifier and intent verifier (each). Strict: no retries. */
+    LLM_CLASSIFIER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(8_000),
+    /** Optional `output_config.effort` for the classifier model. Leave unset unless the model supports it. */
+    LLM_CLASSIFIER_EFFORT: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    ),
     /** Per-request timeout for policy compilation. Compilation is interactive but not latency-critical. */
     LLM_POLICY_COMPILER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(300_000).default(60_000),
     /**
@@ -92,6 +102,18 @@ export const EnvSchema = z
       .default(SANDBOX_MAX_TRANSACTION_MINOR),
   })
   .superRefine((env, ctx) => {
+    // The AI layers must always finish (or time out) well before the sweep may expire the purchase.
+    if (
+      (env.LLM_CLASSIFIER_TIMEOUT_MS + AI_DEADLINE_GRACE_MS) * 2 >
+      env.EVALUATION_TIMEOUT_SECONDS * 1000
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['LLM_CLASSIFIER_TIMEOUT_MS'],
+        message:
+          'LLM_CLASSIFIER_TIMEOUT_MS (+2s) must be at most half of EVALUATION_TIMEOUT_SECONDS',
+      });
+    }
     if (Boolean(env.PAYPAL_CLIENT_ID) !== Boolean(env.PAYPAL_CLIENT_SECRET)) {
       ctx.addIssue({
         code: 'custom',
@@ -132,6 +154,10 @@ export interface AppConfig {
     apiKey: string | undefined;
     policyCompilerModel: string | undefined;
     classifierModel: string | undefined;
+    classifierTimeoutMs: number;
+    classifierEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined;
+    /** True once the API key and the classifier model are set (needed for the AI layers). */
+    classifierConfigured: boolean;
     policyCompilerTimeoutMs: number;
     policyCompilerEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined;
     /** True once the API key and the compiler model are set (needed to compile policies). */
@@ -197,6 +223,9 @@ export function parseConfig(raw: Record<string, string | undefined>): AppConfig 
       apiKey: env.ANTHROPIC_API_KEY,
       policyCompilerModel: env.LLM_MODEL_POLICY_COMPILER,
       classifierModel: env.LLM_MODEL_CLASSIFIER,
+      classifierTimeoutMs: env.LLM_CLASSIFIER_TIMEOUT_MS,
+      classifierEffort: env.LLM_CLASSIFIER_EFFORT,
+      classifierConfigured: Boolean(env.ANTHROPIC_API_KEY && env.LLM_MODEL_CLASSIFIER),
       policyCompilerTimeoutMs: env.LLM_POLICY_COMPILER_TIMEOUT_MS,
       policyCompilerEffort: env.LLM_POLICY_COMPILER_EFFORT,
       policyCompilerConfigured: Boolean(env.ANTHROPIC_API_KEY && env.LLM_MODEL_POLICY_COMPILER),

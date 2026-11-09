@@ -10,6 +10,8 @@ import { PoliciesPage } from './features/policies/PoliciesPage';
 import { PolicyReviewPage } from './features/policies/PolicyReviewPage';
 import { ComingSoonPage, NotFoundPage } from './features/placeholder/ComingSoonPage';
 import { TasksPage } from './features/tasks/TasksPage';
+import { TransactionDetailPage } from './features/transactions/TransactionDetailPage';
+import { TransactionsPage } from './features/transactions/TransactionsPage';
 
 export const router = createBrowserRouter([
   {
@@ -33,20 +35,12 @@ export const router = createBrowserRouter([
               <ComingSoonPage
                 title="Approvals"
                 phase={6}
-                description="Escalated purchases waiting for your decision."
+                description="Approve or reject escalated purchases here (next release). Until then, escalated purchases are under Transactions with status “Pending approval”, where you can cancel them; unapproved ones expire automatically and release their funds."
               />
             ),
           },
-          {
-            path: 'transactions',
-            element: (
-              <ComingSoonPage
-                title="Transactions"
-                phase={5}
-                description="Every purchase request, its decision, and the reasons behind it."
-              />
-            ),
-          },
+          { path: 'transactions', element: <TransactionsPage /> },
+          { path: 'transactions/:id', element: <TransactionDetailPage /> },
           { path: 'policies', element: <PoliciesPage /> },
           { path: 'policies/versions/:id', element: <PolicyReviewPage /> },
           { path: 'tasks', element: <TasksPage /> },

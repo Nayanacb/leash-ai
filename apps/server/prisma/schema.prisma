@@ -62,6 +62,7 @@ enum ApprovalStatus {
   APPROVED
   REJECTED
   EXPIRED
+  CANCELLED
 }
 
 enum PolicyVersionStatus {
@@ -314,6 +315,7 @@ model Transaction {
   @@index([userId, createdAt])
   @@index([userId, status])
   @@index([status, authorizationExpiresAt])
+  @@index([status, createdAt])
 }
 
 model Evaluation {

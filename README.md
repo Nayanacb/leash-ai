@@ -14,7 +14,8 @@ The full design lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | 2     | Foundations: monorepo, schema, config + sandbox guard, logging, health, shell | Done     |
 | 3     | Identity & setup: auth, agents + API keys, merchants, tasks, audit log        | Done     |
 | 4     | Policy compiler, deterministic engine, budget ledger, policy review UI        | Done     |
-| 5+    | Evaluation pipeline, approvals, PayPal, webhooks, refunds                     | Upcoming |
+| 5     | Purchase requests, injection + intent checks, decision combiner, transactions | Done     |
+| 6+    | Human approval UI, PayPal checkout, webhooks, refunds                         | Upcoming |
 
 ## Repository layout
 
@@ -60,7 +61,20 @@ Open <http://localhost:5173>. The overview page shows API, database and PayPal-e
 ## APIs
 
 - **Dashboard API** — `/api/v1`, session cookie (httpOnly, SameSite=Strict) plus an `X-CSRF-Token` header on every state-changing request. JSON bodies only.
-- **Agent API** — `/api/agent/v1`, `Authorization: Bearer lsh_…`. Read-only access to the agent's own tasks; agents can never create or modify a task.
+- **Agent API** — `/api/agent/v1`, `Authorization: Bearer lsh_…`. Read-only access to the agent's own tasks (agents can never create or modify a task), plus purchase requests:
+
+```bash
+curl -s http://localhost:4000/api/agent/v1/purchase-requests \
+  -H "Authorization: Bearer $LEASH_AGENT_KEY" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"taskId":"…","merchantId":"…","amount":{"currency":"USD","value":"18.99"},
+       "item":{"description":"USB-C cable, 2 m","quantity":1},
+       "justification":"Cheapest 2 m cable from an allowed merchant",
+       "sourceContext":[{"kind":"web_page","url":"https://shop.example/cable","content":"…"}]}'
+```
+
+The response is `{ id, status, decision: ALLOW|ESCALATE|BLOCK, reasonCodes, approvalExpiresAt, authorizationExpiresAt }`. Retrying with the same `Idempotency-Key` returns the same purchase. `GET /purchase-requests/:id` polls; `POST /purchase-requests/:id/cancel` withdraws a pending or authorized purchase. No money moves yet (PayPal arrives in Phase 7).
 
 ## Configuration
 
@@ -90,6 +104,8 @@ To verify the live Anthropic integration once the key and model are set (one req
 ```bash
 npm run llm:smoke -w @leash/server
 ```
+
+Add `-- --classifier` to check the injection classifier and intent verifier instead (two benign and two adversarial samples).
 
 Exit code 0 means the API accepted the structured-output request and the response passed strict validation; 1 means it failed (the reason is printed); 2 means it isn't configured.
 

@@ -90,6 +90,14 @@ function describe(event: AuditEventDto): string {
       return `Reserved funds released (${str('reason').replaceAll('_', ' ')})`;
     case 'purchase.evaluation_expired':
       return 'Purchase evaluation timed out; funds released';
+    case 'purchase.decided':
+      return `Purchase decided: ${str('decision')} (${str('status').toLowerCase().replaceAll('_', ' ')})`;
+    case 'purchase.cancelled':
+      return `Purchase cancelled by the ${event.actorType.toLowerCase()}`;
+    case 'purchase.approval_expired':
+      return 'Approval window passed; purchase expired and funds released';
+    case 'purchase.authorization_expired':
+      return 'Authorized purchase was not paid in time; funds released';
     default:
       return event.action;
   }
@@ -102,6 +110,7 @@ const WARNING_ACTIONS = new Set([
   'policy.paused',
   'policy.compile_rejected',
   'purchase.evaluation_expired',
+  'purchase.approval_expired',
 ]);
 
 export function AuditPage() {

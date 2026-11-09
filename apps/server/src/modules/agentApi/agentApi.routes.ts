@@ -1,8 +1,19 @@
-import { IdParamSchema, TaskListQuerySchema } from '@leash/shared';
+import {
+  IdempotencyKeySchema,
+  IdParamSchema,
+  PurchaseRequestInputSchema,
+  TaskListQuerySchema,
+} from '@leash/shared';
 import { Router, type Request } from 'express';
 import type { AppContext } from '../../context.js';
 import { AppError } from '../../lib/errors.js';
 import { agentAuth } from '../../middleware/agentAuth.js';
+import {
+  cancelPurchase,
+  getPurchaseForAgent,
+  submitPurchaseRequest,
+  toAgentResponse,
+} from '../purchases/purchases.service.js';
 import { getTaskForAgent, listTasksForAgent } from '../tasks/tasks.service.js';
 
 function agentFrom(req: Request) {
@@ -40,6 +51,45 @@ export function agentApiRouter(ctx: AppContext): Router {
   router.get('/tasks/:id', async (req, res) => {
     const { id } = IdParamSchema.parse(req.params);
     res.json(await getTaskForAgent(db, agentFrom(req), id));
+  });
+
+  // ── Purchase requests ───────────────────────────────────────────────────
+  // Body parsing for these routes (256 KB) is mounted in app.ts ahead of the global 100 KB parser.
+
+  router.post('/purchase-requests', limiters.purchasePerAgent, async (req, res) => {
+    const key = IdempotencyKeySchema.safeParse(req.get('idempotency-key'));
+    if (!key.success) {
+      throw new AppError(
+        400,
+        'IDEMPOTENCY_KEY_REQUIRED',
+        'Send a unique Idempotency-Key header (8–128 URL-safe characters) with every purchase request',
+      );
+    }
+    const input = PurchaseRequestInputSchema.parse(req.body);
+    const result = await submitPurchaseRequest(
+      { db, config: ctx.config, logger: ctx.logger, evaluators: ctx.purchaseEvaluators },
+      agentFrom(req),
+      key.data,
+      input,
+    );
+    res.status(result.httpStatus).json(result.body);
+  });
+
+  router.get('/purchase-requests/:id', async (req, res) => {
+    const { id } = IdParamSchema.parse(req.params);
+    res.json(await getPurchaseForAgent(db, agentFrom(req), id));
+  });
+
+  router.post('/purchase-requests/:id/cancel', async (req, res) => {
+    const { id } = IdParamSchema.parse(req.params);
+    const agent = agentFrom(req);
+    const tx = await cancelPurchase(db, {
+      userId: agent.userId,
+      agentId: agent.agentId,
+      transactionId: id,
+      actor: { type: 'AGENT', id: agent.agentId },
+    });
+    res.json(toAgentResponse(tx));
   });
 
   const readOnly = () => {

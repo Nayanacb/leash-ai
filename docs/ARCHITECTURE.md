@@ -314,6 +314,20 @@ submit ─▶ EVALUATING ─BLOCK───────────────�
 
 A clean injection result **never** promotes a decision; it is only the absence of one reason to escalate.
 
+### 6.1a Purchase requests as implemented (Phase 5)
+
+`POST /api/agent/v1/purchase-requests` (agent key; `Idempotency-Key` header required; 256 KB body limit on this route only) runs:
+
+1. **Validation** of untrusted input: `taskId`, `merchantId`, `amount`, `item {description ≤ 500, quantity 1–1000, category?}`, `justification ≤ 2000`, `sourceContext` ≤ 10 items × ≤ 20,000 characters and ≤ 60,000 characters combined, http(s) URLs only (never fetched). Unknown fields are rejected; NUL bytes are stripped before storage.
+2. **`reserveForPurchase()`** (Phase 4) under the budget lock. Policy BLOCK → final (no AI calls, nothing reserved).
+3. **AI evaluation pipeline** (`modules/evaluation/`) **with no lock held**: deterministic injection heuristics over every agent-supplied string (NFKC-normalised; invisible/bidi/tag characters, override phrases, claimed approvals, limit tampering, concealment, role markers, hidden CSS, encoded blobs), plus — when `LLM_MODEL_CLASSIFIER` is configured — the injection classifier and intent verifier in parallel. Each call: strict timeout (`LLM_CLASSIFIER_TIMEOUT_MS`), no retries, aborted at the deadline, untrusted text inside per-request random markers, structured output, no tools. Every failure becomes an `error`/`unavailable` signal; not configured = `unavailable`.
+4. **`combineDecision()`** (`modules/authorization/combiner.ts`, pure): the decision table in §6.1; exhaustively tested never to return anything less restrictive than the policy decision.
+5. **Finalize** under the budget lock with compare-and-swap from EVALUATING: BLOCK → BLOCKED + release; ESCALATE → PENDING_APPROVAL + `Approval` (expires after `APPROVAL_TTL_MINUTES`, `snapshotHash` of what the approver will see); ALLOW → AUTHORIZED (expires after `AUTHORIZATION_TTL_MINUTES`). INJECTION/INTENT `Evaluation` rows and a `purchase.decided` audit event are written in the same transaction. If the CAS loses (sweep expired it, or it was cancelled meanwhile), nothing is authorized and the current state is returned.
+
+Idempotency: same agent + key + body → same transaction (201 first, then 200; 202 while still EVALUATING; never evaluated twice); same key, different body → 409. Agents see only coarse reason codes (`LIMIT_EXCEEDED`, `MERCHANT_NOT_ALLOWED`, `POLICY_RULE`, `REQUIRES_APPROVAL`, `NOT_PERMITTED`, …), never thresholds or detector names. `GET /purchase-requests/:id` and `POST /purchase-requests/:id/cancel` are scoped to the calling agent.
+
+**Releasing funds** — every path out of a funded state releases exactly once (CAS + idempotent release under the budget lock): BLOCK by an AI layer, user/agent cancel (EVALUATING, PENDING_APPROVAL, AUTHORIZED → CANCELLED; approval → CANCELLED), approval expiry (PENDING_APPROVAL → EXPIRED; approval → EXPIRED), authorization expiry (AUTHORIZED → EXPIRED), evaluation timeout (EVALUATING → EXPIRED), and the reconciliation safety net for any never-paid terminal state.
+
 ### 6.2 Leash human approval (ESCALATE)
 
 - `Approval` created with `expiresAt = now + 60 min`. The reservation stays held while pending.

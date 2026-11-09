@@ -255,3 +255,91 @@ describe('background scheduler', () => {
     await jobs.stop();
   });
 });
+
+describe('approval and authorization expiry (Phase 5)', () => {
+  // Import lazily to keep this file's Phase 4 tests unchanged.
+  async function purchaser(rules: unknown[]) {
+    const { FakeEvaluators, setupPurchaser } = await import('./purchaseHarness.js');
+    const { app: purchaseApp } = makeApp({ purchaseEvaluators: new FakeEvaluators() });
+    return setupPurchaser(purchaseApp, rules);
+  }
+  const later = () => new Date(Date.now() + 2 * 60 * 60_000);
+
+  it('expires an overdue approval: purchase EXPIRED, approval EXPIRED, funds released exactly once', async () => {
+    const { expireOverdueApprovals } = await import('../../src/modules/budget/recovery.js');
+    const s = await purchaser([{ id: 'n', type: 'new_merchant', action: 'ESCALATE' }]);
+    const { body } = await s.purchase();
+    expect(body.status).toBe('PENDING_APPROVAL');
+
+    expect((await expireOverdueApprovals(db(), { now: new Date() })).expired).not.toContain(
+      body.id,
+    ); // not yet due
+    const runs = await Promise.all(
+      Array.from({ length: 4 }, () => expireOverdueApprovals(db(), { now: later() })),
+    );
+    expect(runs.flatMap((r) => r.expired).filter((id) => id === body.id)).toHaveLength(1);
+
+    const tx = await db().transaction.findUniqueOrThrow({
+      where: { id: body.id },
+      include: { approval: true },
+    });
+    expect(tx.status).toBe('EXPIRED');
+    expect(tx.reasonCodes).toContain('APPROVAL_EXPIRED');
+    expect(tx.approval?.status).toBe('EXPIRED');
+    expect(await ledgerOf(body.id)).toEqual([
+      ['RESERVE', 1899],
+      ['RELEASE', 1899],
+    ]);
+    expect(
+      await db().auditEvent.count({
+        where: { transactionId: body.id, action: 'purchase.approval_expired' },
+      }),
+    ).toBe(1);
+    expect((await s.bot.get(`/api/agent/v1/purchase-requests/${body.id}`)).body).toMatchObject({
+      status: 'EXPIRED',
+      reasonCodes: expect.arrayContaining(['APPROVAL_EXPIRED']),
+    });
+  });
+
+  it('an approval expiring while the user cancels: exactly one wins, released once', async () => {
+    const { expireOverdueApprovals } = await import('../../src/modules/budget/recovery.js');
+    const s = await purchaser([{ id: 'n', type: 'new_merchant', action: 'ESCALATE' }]);
+    const { body } = await s.purchase();
+    await Promise.all([
+      expireOverdueApprovals(db(), { now: later() }),
+      s.user.post(`/api/v1/transactions/${body.id}/cancel`),
+    ]);
+    const tx = await db().transaction.findUniqueOrThrow({ where: { id: body.id } });
+    expect(['EXPIRED', 'CANCELLED']).toContain(tx.status);
+    expect(await ledgerOf(body.id)).toEqual([
+      ['RESERVE', 1899],
+      ['RELEASE', 1899],
+    ]);
+  });
+
+  it('expires an unpaid authorization and releases its funds', async () => {
+    const { expireOverdueAuthorizations } = await import('../../src/modules/budget/recovery.js');
+    const s = await purchaser([]);
+    const { body } = await s.purchase();
+    expect(body.status).toBe('AUTHORIZED');
+    await Promise.all([
+      expireOverdueAuthorizations(db(), { now: later() }),
+      expireOverdueAuthorizations(db(), { now: later() }),
+    ]);
+    const tx = await db().transaction.findUniqueOrThrow({ where: { id: body.id } });
+    expect(tx).toMatchObject({ status: 'EXPIRED' });
+    expect(tx.reasonCodes).toContain('AUTHORIZATION_EXPIRED');
+    expect(await ledgerOf(body.id)).toEqual([
+      ['RESERVE', 1899],
+      ['RELEASE', 1899],
+    ]);
+  });
+
+  it('the full sweep handles all three kinds and the audit chain stays valid', async () => {
+    const s = await purchaser([]);
+    await s.purchase();
+    const result = await sweepReservations(db(), { evaluationTimeoutMs: TIMEOUT_MS, now: later() });
+    expect(result.failed).toEqual([]);
+    expect((await verifyAuditChain(db())).valid).toBe(true);
+  });
+});

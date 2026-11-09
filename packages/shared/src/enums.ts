@@ -33,7 +33,13 @@ export type EvaluationLayer = z.infer<typeof EvaluationLayerSchema>;
 export const VerdictSchema = z.enum(['PASS', 'ESCALATE', 'BLOCK', 'ERROR']);
 export type Verdict = z.infer<typeof VerdictSchema>;
 
-export const ApprovalStatusSchema = z.enum(['PENDING', 'APPROVED', 'REJECTED', 'EXPIRED']);
+export const ApprovalStatusSchema = z.enum([
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+  'EXPIRED',
+  'CANCELLED',
+]);
 export type ApprovalStatus = z.infer<typeof ApprovalStatusSchema>;
 
 export const PolicyVersionStatusSchema = z.enum(['DRAFT', 'ACTIVE', 'SUPERSEDED', 'REJECTED']);

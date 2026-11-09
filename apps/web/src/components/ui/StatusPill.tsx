@@ -21,16 +21,24 @@ export function StatusPill({ tone, children }: { tone: Tone; children: React.Rea
 const STATUS_TONES: Record<string, Tone> = {
   ACTIVE: 'ok',
   COMPLETED: 'ok',
+  AUTHORIZED: 'ok',
+  CAPTURED: 'ok',
   SUSPENDED: 'warn',
+  PENDING_APPROVAL: 'warn',
+  PENDING: 'warn',
+  EVALUATING: 'neutral',
   EXPIRED: 'neutral',
   CANCELLED: 'neutral',
   ARCHIVED: 'neutral',
   REVOKED: 'error',
+  BLOCKED: 'error',
+  REJECTED: 'error',
+  PAYMENT_FAILED: 'error',
 };
 
 /** Pill for any of the lifecycle statuses used across agents, keys, tasks and merchants. */
 export function LifecycleStatus({ status }: { status: string }) {
-  const label = status.charAt(0) + status.slice(1).toLowerCase();
+  const label = (status.charAt(0) + status.slice(1).toLowerCase()).replaceAll('_', ' ');
   return <StatusPill tone={STATUS_TONES[status] ?? 'neutral'}>{label}</StatusPill>;
 }
 

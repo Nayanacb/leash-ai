@@ -22,7 +22,10 @@ import { merchantsRouter } from './modules/merchants/merchants.routes.js';
 import { tasksRouter } from './modules/tasks/tasks.routes.js';
 import { policiesRouter } from './modules/policies/policies.routes.js';
 import type { PolicyCompiler } from './modules/policies/compiler.js';
-import { policyCompilerFromConfig } from './llm/index.js';
+import { policyCompilerFromConfig, purchaseEvaluatorsFromConfig } from './llm/index.js';
+import type { PurchaseEvaluators } from './modules/evaluation/evaluators.js';
+import { transactionsRouter } from './modules/purchases/transactions.routes.js';
+import { PURCHASE_REQUEST_MAX_BODY_BYTES } from '@leash/shared';
 import { healthRouter } from './routes/health.js';
 
 export interface AppDeps {
@@ -35,6 +38,8 @@ export interface AppDeps {
   rateLimits?: Partial<RateLimitSettings>;
   /** Override the policy compiler (tests). Defaults to the configured Anthropic compiler, or null. */
   policyCompiler?: PolicyCompiler | null;
+  /** Override the AI purchase evaluators (tests). Defaults to the configured Anthropic evaluators, or null. */
+  purchaseEvaluators?: PurchaseEvaluators | null;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -43,7 +48,11 @@ export function createApp(deps: AppDeps): Express {
   const limiters = createRateLimiters({ ...DEFAULT_RATE_LIMITS, ...deps.rateLimits });
   const policyCompiler =
     deps.policyCompiler !== undefined ? deps.policyCompiler : policyCompilerFromConfig(config);
-  const ctx: AppContext = { config, db, logger, limiters, policyCompiler };
+  const purchaseEvaluators =
+    deps.purchaseEvaluators !== undefined
+      ? deps.purchaseEvaluators
+      : purchaseEvaluatorsFromConfig(config);
+  const ctx: AppContext = { config, db, logger, limiters, policyCompiler, purchaseEvaluators };
   const probe = deps.probe ?? databaseProbe(db);
 
   app.disable('x-powered-by');
@@ -76,6 +85,12 @@ export function createApp(deps: AppDeps): Express {
   // No CORS middleware on purpose: the dashboard is served from the same origin
   // (Vite proxies /api in development), so cross-origin requests are refused by default.
   // PayPal webhooks (Phase 8) will mount a raw-body route *before* this parser.
+  // Purchase requests carry source context, so they get a larger (but still bounded) body limit.
+  // Mounted first: the global parser below skips bodies that are already parsed.
+  app.use(
+    '/api/agent/v1/purchase-requests',
+    express.json({ limit: PURCHASE_REQUEST_MAX_BODY_BYTES, strict: true }),
+  );
   app.use(express.json({ limit: '100kb', strict: true }));
 
   app.use(healthRouter({ db: probe, version: deps.version, logger }));
@@ -98,6 +113,7 @@ export function createApp(deps: AppDeps): Express {
     merchantsRouter(ctx),
     tasksRouter(ctx),
     policiesRouter(ctx),
+    transactionsRouter(ctx),
     auditRouter(ctx),
   );
   app.use('/api/v1', userApi);
