@@ -12,7 +12,8 @@ The full design lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | ----- | ----------------------------------------------------------------------------- | -------- |
 | 1     | Architecture                                                                  | Done     |
 | 2     | Foundations: monorepo, schema, config + sandbox guard, logging, health, shell | Done     |
-| 3+    | Identity, policy engine, evaluation, approvals, PayPal, webhooks, refunds     | Upcoming |
+| 3     | Identity & setup: auth, agents + API keys, merchants, tasks, audit log        | Done     |
+| 4+    | Policy engine, evaluation, approvals, PayPal, webhooks, refunds               | Upcoming |
 
 ## Repository layout
 
@@ -54,6 +55,11 @@ Open <http://localhost:5173>. The overview page shows API, database and PayPal-e
 | `npm run test:integration`  | Integration tests against the `leash_test` database (needs `db:up`) |
 | `npm run db:up` / `db:down` | Start / stop Postgres                                               |
 | `npm run db:migrate`        | Apply migrations (creates new ones after schema changes)            |
+
+## APIs
+
+- **Dashboard API** — `/api/v1`, session cookie (httpOnly, SameSite=Strict) plus an `X-CSRF-Token` header on every state-changing request. JSON bodies only.
+- **Agent API** — `/api/agent/v1`, `Authorization: Bearer lsh_…`. Read-only access to the agent's own tasks; agents can never create or modify a task.
 
 ## Configuration
 

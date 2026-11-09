@@ -10,10 +10,26 @@ const TONES: Record<Tone, string> = {
 export function StatusPill({ tone, children }: { tone: Tone; children: React.ReactNode }) {
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${TONES[tone]}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${TONES[tone]}`}
     >
       <span aria-hidden className="size-1.5 rounded-full bg-current" />
       {children}
     </span>
   );
+}
+
+const STATUS_TONES: Record<string, Tone> = {
+  ACTIVE: 'ok',
+  COMPLETED: 'ok',
+  SUSPENDED: 'warn',
+  EXPIRED: 'neutral',
+  CANCELLED: 'neutral',
+  ARCHIVED: 'neutral',
+  REVOKED: 'error',
+};
+
+/** Pill for any of the lifecycle statuses used across agents, keys, tasks and merchants. */
+export function LifecycleStatus({ status }: { status: string }) {
+  const label = status.charAt(0) + status.slice(1).toLowerCase();
+  return <StatusPill tone={STATUS_TONES[status] ?? 'neutral'}>{label}</StatusPill>;
 }

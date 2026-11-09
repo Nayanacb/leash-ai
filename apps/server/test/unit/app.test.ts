@@ -2,12 +2,14 @@ import { HealthResponseSchema, ReadinessResponseSchema } from '@leash/shared';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
-import type { DatabaseProbe } from '../../src/db.js';
+import { createDatabase, type DatabaseProbe } from '../../src/db.js';
 import { captureLogger, testConfig } from '../helpers.js';
 
 function buildApp(db: DatabaseProbe = { ping: async () => {} }) {
   const { logger } = captureLogger();
-  return createApp({ config: testConfig(), logger, db, version: '9.9.9' });
+  // The client is never used by these tests (no query is issued), so it points nowhere.
+  const unusedDb = createDatabase('postgresql://unused:unused@127.0.0.1:1/unused');
+  return createApp({ config: testConfig(), logger, db: unusedDb, probe: db, version: '9.9.9' });
 }
 
 describe('health endpoints', () => {

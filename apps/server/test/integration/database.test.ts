@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../../src/app.js';
-import { createDatabase, databaseProbe, type Database } from '../../src/db.js';
+import { createDatabase, type Database } from '../../src/db.js';
+import { recordAuditEvent } from '../../src/modules/audit/auditLog.js';
 import { captureLogger, testConfig } from '../helpers.js';
 import { testDatabaseUrl } from './testDatabase.js';
 
@@ -67,7 +68,7 @@ describe('database connectivity', () => {
     const app = createApp({
       config: testConfig(),
       logger: captureLogger().logger,
-      db: databaseProbe(db),
+      db,
       version: 'test',
     });
     const res = await request(app).get('/readyz');
@@ -78,9 +79,7 @@ describe('database connectivity', () => {
 
 describe('append-only tables', () => {
   it('AuditEvent rejects UPDATE, DELETE and TRUNCATE', async () => {
-    const event = await db.auditEvent.create({
-      data: { actorType: 'SYSTEM', action: 'test.event', prevHash: 'genesis', hash: randomUUID() },
-    });
+    const event = await recordAuditEvent(db, { actorType: 'SYSTEM', action: 'test.event' });
     await expect(
       db.auditEvent.update({ where: { seq: event.seq }, data: { action: 'tampered' } }),
     ).rejects.toThrow(/append-only/);

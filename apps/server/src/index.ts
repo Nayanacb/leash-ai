@@ -2,7 +2,7 @@ import 'dotenv/config';
 import pkg from '../package.json' with { type: 'json' };
 import { createApp } from './app.js';
 import { ConfigError, parseConfig, type AppConfig } from './config/env.js';
-import { createDatabase, databaseProbe } from './db.js';
+import { createDatabase } from './db.js';
 import { createLogger } from './lib/logger.js';
 
 function loadConfigOrExit(): AppConfig {
@@ -23,7 +23,7 @@ async function main() {
   const logger = createLogger({ level: config.logLevel, pretty: config.nodeEnv === 'development' });
   const db = createDatabase(config.databaseUrl);
 
-  const app = createApp({ config, logger, db: databaseProbe(db), version: pkg.version });
+  const app = createApp({ config, logger, db, version: pkg.version });
   const server = app.listen(config.port, config.host, () => {
     logger.info(
       {

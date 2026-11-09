@@ -163,6 +163,8 @@ model Agent {
 model AgentApiKey {
   id         String    @id @default(uuid(7)) @db.Uuid
   agentId    String    @db.Uuid
+  /// Optional human label, e.g. "staging worker".
+  label      String?
   /// Non-secret prefix shown in the UI to identify the key (e.g. "lsh_3f9a").
   prefix     String
   /// SHA-256 of the full key; the key itself is shown once and never stored.
@@ -180,16 +182,18 @@ model AgentApiKey {
 // ───────────────────────────── Configuration ─────────────────────────────
 
 model Merchant {
-  id               String   @id @default(uuid(7)) @db.Uuid
-  userId           String   @db.Uuid
+  id               String    @id @default(uuid(7)) @db.Uuid
+  userId           String    @db.Uuid
   displayName      String
   /// PayPal sandbox business account that receives payment. Resolved server-side; never supplied by agents.
   paypalEmail      String
   paypalMerchantId String?
   domain           String?
   category         String
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  /// Archived merchants stay referenceable by history but cannot be used in new tasks or payments.
+  archivedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   user         User          @relation(fields: [userId], references: [id])
   transactions Transaction[]
@@ -272,9 +276,9 @@ model Transaction {
   /// Untrusted and possibly incomplete external content the agent says it consumed.
   untrustedContext   Json?
 
-  status      TransactionStatus @default(EVALUATING)
-  decision    Decision?
-  reasonCodes String[]          @default([])
+  status       TransactionStatus @default(EVALUATING)
+  decision     Decision?
+  reasonCodes  String[]          @default([])
   /// Hash of what the approver was shown (approve-what-you-saw).
   snapshotHash String?
 

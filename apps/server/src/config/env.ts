@@ -39,6 +39,11 @@ export const EnvSchema = z
     DATABASE_URL: postgresUrl,
     WEB_ORIGIN: z.url().default('http://localhost:5173'),
 
+    /** Hard limit on a session's lifetime, regardless of activity. */
+    SESSION_ABSOLUTE_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(168),
+    /** A session unused for this long is rejected. */
+    SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(5).max(10_080).default(720),
+
     PAYPAL_ENV: z.literal('sandbox', {
       error: 'PAYPAL_ENV must be "sandbox". Live PayPal is not permitted.',
     }),
@@ -91,6 +96,14 @@ export interface AppConfig {
   logLevel: Env['LOG_LEVEL'];
   databaseUrl: string;
   webOrigin: string;
+  /** Origins allowed to make state-changing browser requests (CSRF origin check). */
+  allowedOrigins: string[];
+  session: {
+    absoluteTtlMs: number;
+    idleTimeoutMs: number;
+    /** Secure cookies (and the __Host- prefix) outside local development. */
+    secureCookie: boolean;
+  };
   paypal: {
     environment: 'sandbox';
     apiBase: typeof PAYPAL_SANDBOX_API_BASE;
@@ -143,6 +156,12 @@ export function parseConfig(raw: Record<string, string | undefined>): AppConfig 
     logLevel: env.LOG_LEVEL,
     databaseUrl: env.DATABASE_URL,
     webOrigin: env.WEB_ORIGIN,
+    allowedOrigins: allowedOriginsFor(env.WEB_ORIGIN, env.NODE_ENV),
+    session: {
+      absoluteTtlMs: env.SESSION_ABSOLUTE_TTL_HOURS * 3_600_000,
+      idleTimeoutMs: env.SESSION_IDLE_TIMEOUT_MINUTES * 60_000,
+      secureCookie: env.NODE_ENV === 'production',
+    },
     paypal: {
       environment: 'sandbox',
       apiBase: PAYPAL_SANDBOX_API_BASE,
@@ -165,4 +184,19 @@ export function parseConfig(raw: Record<string, string | undefined>): AppConfig 
       sandboxMaxTransactionMinor: env.SANDBOX_MAX_TRANSACTION_MINOR,
     },
   };
+}
+
+/**
+ * The configured dashboard origin. In development the localhost/127.0.0.1
+ * twin is also accepted, since browsers treat them as different origins.
+ */
+function allowedOriginsFor(webOrigin: string, nodeEnv: Env['NODE_ENV']): string[] {
+  const origin = new URL(webOrigin).origin;
+  const origins = new Set([origin]);
+  if (nodeEnv !== 'production') {
+    const url = new URL(origin);
+    if (url.hostname === 'localhost') origins.add(origin.replace('//localhost', '//127.0.0.1'));
+    if (url.hostname === '127.0.0.1') origins.add(origin.replace('//127.0.0.1', '//localhost'));
+  }
+  return [...origins];
 }

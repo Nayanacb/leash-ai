@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from 'react-router';
+import { NavLink, Outlet, useNavigate } from 'react-router';
+import { useLogout, useSession } from '../../api/session';
 
 const NAV = [
   { to: '/', label: 'Overview', end: true },
@@ -11,10 +12,44 @@ const NAV = [
   { to: '/audit', label: 'Audit log' },
 ];
 
+function AccountMenu() {
+  const session = useSession();
+  const logout = useLogout();
+  const navigate = useNavigate();
+  const signOut = (scope: 'this' | 'all') =>
+    logout.mutate(scope, { onSettled: () => navigate('/login', { replace: true }) });
+
+  if (!session.data) return null;
+  return (
+    <div className="border-t border-slate-200 px-5 py-4 text-sm">
+      <p className="truncate font-medium text-slate-800" title={session.data.user.email}>
+        {session.data.user.email}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+        <button
+          type="button"
+          className="text-slate-600 underline hover:text-slate-900"
+          onClick={() => signOut('this')}
+        >
+          Sign out
+        </button>
+        <button
+          type="button"
+          className="text-slate-500 underline hover:text-slate-900"
+          title="End every session for this account, on every device"
+          onClick={() => signOut('all')}
+        >
+          Sign out everywhere
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function AppLayout() {
   return (
     <div className="min-h-screen md:flex">
-      <aside className="border-b border-slate-200 bg-white md:w-60 md:shrink-0 md:border-r md:border-b-0">
+      <aside className="flex flex-col border-b border-slate-200 bg-white md:sticky md:top-0 md:h-screen md:w-60 md:shrink-0 md:border-r md:border-b-0">
         <div className="flex items-center gap-2 px-5 py-4">
           <span
             aria-hidden
@@ -29,7 +64,7 @@ export function AppLayout() {
         </div>
         <nav
           aria-label="Main"
-          className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-col md:overflow-visible"
+          className="flex gap-1 overflow-x-auto px-3 pb-3 md:flex-1 md:flex-col md:overflow-visible"
         >
           {NAV.map((item) => (
             <NavLink
@@ -48,6 +83,7 @@ export function AppLayout() {
             </NavLink>
           ))}
         </nav>
+        <AccountMenu />
       </aside>
 
       <div className="min-w-0 flex-1">

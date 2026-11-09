@@ -196,8 +196,8 @@ Conventions: UUID primary keys; **money as integer minor units** (`amountMinor`)
 | `User` | email (unique), passwordHash (argon2id) | Multi-user. |
 | `Session` | userId, tokenHash (unique), expiresAt, stepUpAt | Opaque session tokens, hashed. |
 | `Agent` | userId, name, status (ACTIVE/SUSPENDED/REVOKED) | |
-| `AgentApiKey` | agentId, prefix, keyHash (unique), lastUsedAt, expiresAt?, revokedAt? | 256-bit random keys, SHA-256 hashed, shown once. |
-| `Merchant` | userId, displayName, paypalEmail, paypalMerchantId?, domain?, category | unique (userId, paypalEmail). |
+| `AgentApiKey` | agentId, label?, prefix, keyHash (unique), lastUsedAt, expiresAt, revokedAt? | 256-bit random keys, SHA-256 hashed, shown once. Every key expires (7/30/90/365 days); max 5 active per agent. |
+| `Merchant` | userId, displayName, paypalEmail, paypalMerchantId?, domain?, category, archivedAt? | unique (userId, paypalEmail). Archived instead of deleted (history references it); archived merchants can't be used in new tasks. |
 | `PolicyVersion` | userId, version, sourceText, compiledRules (JSON), rulesHash, status, compilerModel, promptVersion, unmappedClauses, confirmedAt | unique (userId, version); partial unique index: one ACTIVE per user; immutable once ACTIVE. |
 | `Task` | userId, agentId, instruction, budgetMinor, currency, allowedMerchantIds[], status, expiresAt | Created only by the user. |
 | `Transaction` | userId, agentId, taskId, merchantId, policyVersionId, idempotencyKey, requestHash, amountMinor, currency, itemDescription, quantity, category, agentJustification, untrustedContext, status, decision, reasonCodes[], snapshotHash, authorizedAt, authorizationExpiresAt, paypalOrderId (unique), paypalCaptureId (unique), capturedMinor, refundedMinor, version | unique (agentId, idempotencyKey). |
@@ -215,6 +215,13 @@ Conventions: UUID primary keys; **money as integer minor units** (`amountMinor`)
 - **Spending:** every policy evaluation + reservation happens inside one DB transaction holding `pg_advisory_xact_lock(<per-user key>)`. Two concurrent requests for the same user serialize; the second sees the first's reservation.
 - **Audit chain:** every append takes a global `pg_advisory_xact_lock(<audit key>)`, reads the last hash, computes the new one, and inserts — in the same transaction. The chain is linear even under concurrent writers. `seq` gives the canonical order.
 - **State transitions:** compare-and-swap `UPDATE … WHERE id = ? AND status = <expected>`; zero rows updated = lost race = no-op/409.
+
+**Audit chain details (implemented in Phase 3)**
+
+- `hash = SHA-256("leash-audit-v1\n" + canonicalJSON({prevHash, id, userId, transactionId, actorType, actorId, action, data, createdAt}))`, with keys sorted recursively so the hash survives `jsonb` round-trips. The first event's `prevHash` is 64 zeros.
+- Each append runs **inside the same DB transaction as the action it records**, so an action and its audit entry commit or roll back together.
+- Verification recomputes every hash and link from genesis (or from a trusted anchor event). It detects modification, insertion, deletion and reordering. Removing the *newest* events is only detectable against an externally stored checkpoint (planned for Phase 9).
+- Audit data never contains secrets: callers don't pass them, and the writer redacts secret-looking keys as a backstop.
 
 Phase 2 ships the full schema and the initial migration; behaviour arrives in later phases.
 
@@ -364,6 +371,7 @@ Later phase. The user explicitly vaults a PayPal payment method with a clear con
 | Compiler mis-translates a rule | Deterministic rendering, sanity bounds, unmapped-clause list, simulator, step-up confirm, global ceiling. |
 | Policy tampering | Immutable versions (DB trigger), audited confirmation, `policyVersionId` on every transaction. |
 | Approval CSRF / clickjacking / stale approval | SameSite=strict httpOnly cookies, CSRF tokens, `frame-ancestors 'none'`, step-up, `snapshotHash`. |
+| CSRF on any dashboard mutation | Three layers (Phase 3): `Origin`/`Sec-Fetch-Site` check; JSON-only bodies (HTML forms can't send them without a CORS preflight, which is never approved); `X-CSRF-Token` = HMAC-SHA256 keyed by the session token, verified in constant time. Login/registration are covered by the first two. |
 | Social engineering via agent text / approval fatigue | Untrusted framing, highlighted injection hits, specific reason codes, expiry instead of backlog. |
 | XSS via agent content | React escaping, no `dangerouslySetInnerHTML`, strict CSP, plain-text rendering. |
 | IDOR / cross-tenant access | Every query scoped by `userId`; keys bound to one agent and user; tests for cross-user access. |
