@@ -27,8 +27,12 @@ export interface EvaluationRecord {
 
 export interface AiEvaluationResult {
   signals: AiSignals;
-  records: [EvaluationRecord, EvaluationRecord];
+  /** INJECTION always; INTENT unless the AI layers were skipped. */
+  records: EvaluationRecord[];
 }
+
+const SKIP_REASON =
+  'deterministic high-severity injection finding: the purchase is blocked without consulting the AI layers';
 
 /** Every agent-supplied string, labelled by where it came from. */
 export function untrustedTexts(input: PurchaseForEvaluation): UntrustedText[] {
@@ -111,6 +115,30 @@ export async function runAiEvaluation(
   options: { deadlineMs: number },
 ): Promise<AiEvaluationResult> {
   const heuristics = scanUntrustedText(untrustedTexts(input));
+
+  // A high-severity deterministic finding blocks regardless of what any model
+  // says, so the models are not consulted: nothing for them to decide.
+  if (heuristics.severity === 'high') {
+    return {
+      signals: {
+        heuristics: { severity: 'high' },
+        injection: { status: 'skipped', reason: SKIP_REASON },
+        intent: { status: 'skipped', reason: SKIP_REASON },
+      },
+      records: [
+        {
+          layer: 'INJECTION',
+          verdict: 'BLOCK',
+          confidence: null,
+          details: { heuristics, classifier: null, aiSkipped: SKIP_REASON },
+          model: null,
+          promptVersion: null,
+          latencyMs: null,
+          error: null,
+        },
+      ],
+    };
+  }
 
   const [classifier, intent] = evaluators
     ? await Promise.all([

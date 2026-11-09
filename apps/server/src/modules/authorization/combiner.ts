@@ -34,8 +34,10 @@ export function combineDecision(
     escalate.push('AI_SIGNALS_INVALID');
   } else {
     const signals: AiSignals = parsed.data;
+    const highFinding = signals.heuristics.severity === 'high';
 
-    if (signals.heuristics.severity === 'high') block.push('INJECTION_DETECTED');
+    // Deterministic heuristics: high blocks, medium escalates, low is recorded only.
+    if (highFinding) block.push('INJECTION_DETECTED');
     else if (signals.heuristics.severity === 'medium') escalate.push('INJECTION_SUSPECTED');
 
     const inj = signals.injection;
@@ -43,7 +45,8 @@ export function combineDecision(
       if (inj.verdict === 'malicious' && inj.confidence >= BLOCK_CONFIDENCE)
         block.push('INJECTION_DETECTED');
       else if (inj.verdict !== 'clean') escalate.push('INJECTION_SUSPECTED');
-    } else {
+    } else if (!(inj.status === 'skipped' && highFinding)) {
+      // Errors, unavailability, and any "skipped" without a blocking finding all fail closed.
       escalate.push('AI_UNAVAILABLE');
     }
 
@@ -52,7 +55,7 @@ export function combineDecision(
       if (intent.verdict === 'mismatch' && intent.confidence >= BLOCK_CONFIDENCE)
         block.push('INTENT_MISMATCH');
       else if (intent.verdict !== 'match') escalate.push('INTENT_UNCERTAIN');
-    } else {
+    } else if (!(intent.status === 'skipped' && highFinding)) {
       escalate.push('AI_UNAVAILABLE');
     }
   }

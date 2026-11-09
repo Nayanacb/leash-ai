@@ -145,13 +145,15 @@ export async function submitPurchaseRequest(
       select: { displayName: true, category: true, paypalEmail: true },
     }),
   ]);
+  // The AI layers inspect the agent's ORIGINAL text (so e.g. NUL bytes are seen as a
+  // finding); only the sanitized copy is stored. Prompt builders strip NUL themselves.
   const forEvaluation: PurchaseForEvaluation = {
     taskInstruction: task.instruction,
     merchant: { displayName: merchant.displayName, category: merchant.category },
-    amount: { currency: input.amount.currency, value: input.amount.value },
-    item: input.item,
-    justification: input.justification,
-    sourceContext: input.sourceContext,
+    amount: { currency: rawInput.amount.currency, value: rawInput.amount.value },
+    item: rawInput.item,
+    justification: rawInput.justification,
+    sourceContext: rawInput.sourceContext,
   };
   let ai: AiEvaluationResult | null = null;
   try {
@@ -296,7 +298,12 @@ async function finalizeEvaluation(
         reasonCodes,
         policyDecision: input.policy.decision,
         layers: input.ai
-          ? Object.fromEntries(input.ai.records.map((r) => [r.layer.toLowerCase(), r.verdict]))
+          ? {
+              intent: 'SKIPPED',
+              ...Object.fromEntries(
+                input.ai.records.map((r) => [r.layer.toLowerCase(), r.verdict]),
+              ),
+            }
           : { injection: 'ERROR', intent: 'ERROR' },
         approvalExpiresAt,
         authorizationExpiresAt,

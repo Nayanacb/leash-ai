@@ -51,8 +51,13 @@ const InjectionDetails = z
       })
       .nullable()
       .catch(null),
+    aiSkipped: z.string().optional().catch(undefined),
   })
-  .catch({ heuristics: { severity: 'none', findings: [] }, classifier: null });
+  .catch({
+    heuristics: { severity: 'none', findings: [] },
+    classifier: null,
+    aiSkipped: undefined,
+  });
 const IntentDetails = z
   .object({ verdict: z.string(), confidence: z.number(), reasons: z.array(z.string()) })
   .nullable()
@@ -288,6 +293,12 @@ function TransactionDetail({ t }: { t: TransactionDetailDto }) {
               </p>
             ))}
           </Layer>
+          {injectionDetails.aiSkipped && (
+            <p className="px-5 py-3 text-sm text-slate-700">
+              AI checks were not run: a high-severity finding above blocks this purchase on its own,
+              whatever a model would say.
+            </p>
+          )}
           <Layer title="3. Intent check" verdict={intent?.verdict} meta={intent}>
             {intentDetails && (
               <>

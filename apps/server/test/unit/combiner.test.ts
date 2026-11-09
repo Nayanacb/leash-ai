@@ -120,6 +120,64 @@ describe('combineDecision — the decision table', () => {
     }
   });
 
+  it('a high heuristic finding blocks even when the models were skipped', () => {
+    const skipped = { status: 'skipped', reason: 'high finding' } as const;
+    expect(
+      combineDecision(policy('ALLOW'), {
+        heuristics: { severity: 'high' },
+        injection: skipped,
+        intent: skipped,
+      }),
+    ).toEqual({
+      decision: 'BLOCK',
+      reasonCodes: ['INJECTION_DETECTED'],
+    });
+  });
+
+  it('"skipped" without a high finding cannot be used to dodge the AI layers: it escalates', () => {
+    const skipped = { status: 'skipped', reason: 'trust me' } as const;
+    for (const severity of ['none', 'low', 'medium'] as const) {
+      const result = combineDecision(policy('ALLOW'), {
+        heuristics: { severity },
+        injection: skipped,
+        intent: skipped,
+      });
+      expect(result.decision).toBe('ESCALATE');
+      expect(result.reasonCodes).toContain('AI_UNAVAILABLE');
+    }
+  });
+
+  it('a medium finding escalates even when the classifier says clean; the classifier may still block', () => {
+    expect(
+      combineDecision(policy('ALLOW'), withSignals({ heuristics: { severity: 'medium' } }))
+        .decision,
+    ).toBe('ESCALATE');
+    expect(
+      combineDecision(
+        policy('ALLOW'),
+        withSignals({
+          heuristics: { severity: 'medium' },
+          injection: { status: 'ok', verdict: 'malicious', confidence: 0.9 },
+        }),
+      ).decision,
+    ).toBe('BLOCK');
+  });
+
+  it('a low finding defers to the AI layers', () => {
+    expect(
+      combineDecision(policy('ALLOW'), withSignals({ heuristics: { severity: 'low' } })).decision,
+    ).toBe('ALLOW');
+    expect(
+      combineDecision(
+        policy('ALLOW'),
+        withSignals({
+          heuristics: { severity: 'low' },
+          injection: { status: 'ok', verdict: 'suspicious', confidence: 0.6 },
+        }),
+      ).decision,
+    ).toBe('ESCALATE');
+  });
+
   it('keeps policy reasons first, then AI reasons, without duplicates', () => {
     const result = combineDecision(
       policy('ESCALATE', ['NEW_MERCHANT']),
@@ -144,6 +202,7 @@ describe('combineDecision — AI can never make a decision less restrictive', ()
     { status: 'ok', verdict: 'malicious', confidence: 0.95 },
     { status: 'error', error: 'x' },
     { status: 'unavailable', error: 'x' },
+    { status: 'skipped', reason: 'x' },
   ];
   const intents: AiSignals['intent'][] = [
     { status: 'ok', verdict: 'match', confidence: 1 },
@@ -153,6 +212,7 @@ describe('combineDecision — AI can never make a decision less restrictive', ()
     { status: 'ok', verdict: 'mismatch', confidence: 0.99 },
     { status: 'error', error: 'x' },
     { status: 'unavailable', error: 'x' },
+    { status: 'skipped', reason: 'x' },
   ];
 
   it('holds for every combination of policy decision and AI signals', () => {
@@ -181,6 +241,6 @@ describe('combineDecision — AI can never make a decision less restrictive', ()
         }
       }
     }
-    expect(checked).toBe(3 * 4 * 6 * 7);
+    expect(checked).toBe(3 * 4 * 7 * 8);
   });
 });

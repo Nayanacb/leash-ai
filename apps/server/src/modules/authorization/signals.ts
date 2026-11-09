@@ -18,6 +18,12 @@ export const InjectionClassifierSignalSchema = z.discriminatedUnion('status', [
   }),
   /** Not configured, timed out, refused, or returned invalid output. Always fails closed. */
   z.object({ status: z.enum(['error', 'unavailable']), error: z.string() }),
+  /**
+   * Not run because a deterministic high-severity finding already blocks the
+   * purchase. The combiner honours this ONLY alongside a high heuristic
+   * finding; anywhere else it is treated as unavailable (escalate).
+   */
+  z.object({ status: z.literal('skipped'), reason: z.string() }),
 ]);
 
 export const IntentSignalSchema = z.discriminatedUnion('status', [
@@ -27,6 +33,7 @@ export const IntentSignalSchema = z.discriminatedUnion('status', [
     confidence: z.number().min(0).max(1),
   }),
   z.object({ status: z.enum(['error', 'unavailable']), error: z.string() }),
+  z.object({ status: z.literal('skipped'), reason: z.string() }),
 ]);
 
 export const AiSignalsSchema = z.object({
