@@ -1,6 +1,7 @@
 import {
   ActivePolicyResponseSchema,
   BudgetStatusResponseSchema,
+  CompilerStatusResponseSchema,
   PolicyValidationResponseSchema,
   PolicyVersionDtoSchema,
   PolicyVersionListResponseSchema,
@@ -148,5 +149,23 @@ export function useSimulatePurchase() {
       merchantId: string;
       amount: { currency: Currency; value: string };
     }) => apiSend('POST', '/api/v1/policies/simulate', input, SimulationResponseSchema),
+  });
+}
+
+export function useCompilerStatus() {
+  return useQuery({
+    queryKey: ['policies', 'compiler-status'],
+    queryFn: ({ signal }) =>
+      apiGet('/api/v1/policies/compiler-status', CompilerStatusResponseSchema, { signal }),
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useCreateDraftFromJson() {
+  const invalidate = useInvalidatePolicies();
+  return useMutation({
+    mutationFn: (input: { compiledRules: unknown; sourceText?: string }) =>
+      apiSend('POST', '/api/v1/policies/drafts', input, PolicyVersionDtoSchema),
+    onSuccess: invalidate,
   });
 }

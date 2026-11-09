@@ -3,6 +3,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { createApp } from './app.js';
 import { ConfigError, parseConfig, type AppConfig } from './config/env.js';
 import { createDatabase } from './db.js';
+import { startBackgroundJobs } from './jobs/scheduler.js';
 import { createLogger } from './lib/logger.js';
 
 function loadConfigOrExit(): AppConfig {
@@ -35,6 +36,8 @@ async function main() {
     );
   });
 
+  const jobs = startBackgroundJobs({ db, config, logger });
+
   let shuttingDown = false;
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
@@ -43,6 +46,7 @@ async function main() {
     const forceExit = setTimeout(() => process.exit(1), 10_000);
     forceExit.unref();
     server.close(async () => {
+      await jobs.stop();
       await db.$disconnect();
       process.exit(0);
     });

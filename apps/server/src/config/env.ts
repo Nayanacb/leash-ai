@@ -78,6 +78,10 @@ export const EnvSchema = z
       .min(1)
       .max(120)
       .default(DEFAULT_AUTHORIZATION_TTL_MINUTES),
+    /** A purchase still EVALUATING after this long is expired and its funds released. */
+    EVALUATION_TIMEOUT_SECONDS: z.coerce.number().int().min(30).max(3600).default(120),
+    /** How often the reservation sweep runs. */
+    RESERVATION_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
     SANDBOX_MAX_TRANSACTION_MINOR: z.coerce
       .number()
       .int()
@@ -134,6 +138,10 @@ export interface AppConfig {
     policyCompilerConfigured: boolean;
     /** True once the key and both model IDs are present. */
     configured: boolean;
+  };
+  jobs: {
+    evaluationTimeoutMs: number;
+    sweepIntervalMs: number;
   };
   limits: {
     approvalTtlMinutes: number;
@@ -195,6 +203,10 @@ export function parseConfig(raw: Record<string, string | undefined>): AppConfig 
       configured: Boolean(
         env.ANTHROPIC_API_KEY && env.LLM_MODEL_POLICY_COMPILER && env.LLM_MODEL_CLASSIFIER,
       ),
+    },
+    jobs: {
+      evaluationTimeoutMs: env.EVALUATION_TIMEOUT_SECONDS * 1000,
+      sweepIntervalMs: env.RESERVATION_SWEEP_INTERVAL_SECONDS * 1000,
     },
     limits: {
       approvalTtlMinutes: env.APPROVAL_TTL_MINUTES,

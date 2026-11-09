@@ -1,9 +1,7 @@
-import { MAX_POLICY_SOURCE_LENGTH } from '@leash/shared';
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router';
 import {
   useActivePolicy,
-  useCompilePolicy,
   useDuplicateVersion,
   usePauseSpending,
   usePolicyVersions,
@@ -11,17 +9,13 @@ import {
 import { Button } from '../../components/ui/Button';
 import { Dialog } from '../../components/ui/Dialog';
 import { EmptyState, ErrorMessage, Loading } from '../../components/ui/Feedback';
-import { Field, Input, Textarea } from '../../components/ui/Form';
+import { Field, Input } from '../../components/ui/Form';
 import { PageHeader, Panel, Table, Td, Th } from '../../components/ui/Layout';
 import { LifecycleStatus, StatusPill } from '../../components/ui/StatusPill';
 import { formatDateTime } from '../../lib/format';
 import { BudgetMeters } from './BudgetMeters';
+import { NewPolicyPanel } from './NewPolicyPanel';
 import { PolicyRules } from './PolicyRules';
-
-const EXAMPLE = `Never spend more than $50 on a single purchase.
-Keep total spending under $200 per week and $600 per month.
-Ask me before buying from a store I haven't used before.
-Only buy office supplies, electronics or software.`;
 
 export function PoliciesPage() {
   return (
@@ -133,61 +127,6 @@ function PauseDialog({ onClose }: { onClose: () => void }) {
         </div>
       </form>
     </Dialog>
-  );
-}
-
-function NewPolicyPanel() {
-  const compile = useCompilePolicy();
-  const navigate = useNavigate();
-  const [text, setText] = useState('');
-
-  function submit(e: FormEvent) {
-    e.preventDefault();
-    compile.mutate(
-      {
-        sourceText: text,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-        currency: 'USD',
-      },
-      { onSuccess: (draft) => navigate(`/policies/versions/${draft.id}`) },
-    );
-  }
-
-  return (
-    <Panel title="Write a new policy">
-      <form onSubmit={submit} className="space-y-4 px-5 py-4">
-        <Field
-          label="Your rules"
-          hint={`Amounts in USD, periods in your time zone (${Intl.DateTimeFormat().resolvedOptions().timeZone}). Refer to merchants by the names in your registry.`}
-        >
-          {(id) => (
-            <Textarea
-              id={id}
-              rows={6}
-              required
-              maxLength={MAX_POLICY_SOURCE_LENGTH}
-              placeholder={EXAMPLE}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
-          )}
-        </Field>
-        <ErrorMessage error={compile.error} />
-        <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={compile.isPending || !text.trim()}>
-            {compile.isPending ? 'Translating…' : 'Translate into rules'}
-          </Button>
-          {!text && (
-            <Button variant="ghost" onClick={() => setText(EXAMPLE)}>
-              Use an example
-            </Button>
-          )}
-          <p className="text-xs text-slate-500">
-            You will review the result before anything is enforced.
-          </p>
-        </div>
-      </form>
-    </Panel>
   );
 }
 

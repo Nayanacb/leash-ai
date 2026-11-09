@@ -408,49 +408,68 @@ export async function reserveForPurchase(
  * expired, blocked by an AI layer, or payment failed). Idempotent: a second
  * call releases nothing.
  */
+export interface ReleaseInput {
+  userId: string;
+  transactionId: string;
+  reason: string;
+  actor: { type: 'USER' | 'SYSTEM' | 'AGENT'; id: string | null };
+}
+
+/**
+ * Releases whatever is still reserved for a transaction, inside a transaction
+ * that already holds the user's budget lock. Writes the RELEASE entry and its
+ * audit event; releases nothing (and records nothing) if nothing is held.
+ */
+export async function releaseWithinTransaction(
+  tx: Tx,
+  input: ReleaseInput,
+): Promise<{ releasedMinor: number }> {
+  const transaction = await tx.transaction.findFirst({
+    where: { id: input.transactionId, userId: input.userId },
+    include: { ledgerEntries: true },
+  });
+  if (!transaction) throw new AppError(404, 'TRANSACTION_NOT_FOUND', 'Transaction not found');
+
+  const reserved = transaction.ledgerEntries
+    .filter((l) => l.type === 'RESERVE')
+    .reduce((s, l) => s + l.amountMinor, 0);
+  const released = transaction.ledgerEntries
+    .filter((l) => l.type === 'RELEASE')
+    .reduce((s, l) => s + l.amountMinor, 0);
+  const outstanding = reserved - released;
+  if (outstanding <= 0) return { releasedMinor: 0 };
+
+  await tx.ledgerEntry.create({
+    data: {
+      userId: input.userId,
+      transactionId: transaction.id,
+      type: 'RELEASE',
+      amountMinor: outstanding,
+      currency: transaction.currency,
+    },
+  });
+  await appendAuditEvent(tx, {
+    actorType: input.actor.type,
+    actorId: input.actor.id,
+    userId: input.userId,
+    transactionId: transaction.id,
+    action: 'purchase.reservation_released',
+    data: { releasedMinor: outstanding, currency: transaction.currency, reason: input.reason },
+  });
+  return { releasedMinor: outstanding };
+}
+
+/**
+ * Releases whatever is still reserved for a transaction (e.g. it was rejected,
+ * expired, blocked by an AI layer, or payment failed). Idempotent: a second
+ * call releases nothing.
+ */
 export async function releaseReservation(
   db: Database,
-  input: {
-    userId: string;
-    transactionId: string;
-    reason: string;
-    actor: { type: 'USER' | 'SYSTEM' | 'AGENT'; id: string | null };
-  },
+  input: ReleaseInput,
 ): Promise<{ releasedMinor: number }> {
   return db.$transaction(async (tx) => {
     await lockUserBudget(tx, input.userId);
-    const transaction = await tx.transaction.findFirst({
-      where: { id: input.transactionId, userId: input.userId },
-      include: { ledgerEntries: true },
-    });
-    if (!transaction) throw new AppError(404, 'TRANSACTION_NOT_FOUND', 'Transaction not found');
-
-    const reserved = transaction.ledgerEntries
-      .filter((l) => l.type === 'RESERVE')
-      .reduce((s, l) => s + l.amountMinor, 0);
-    const released = transaction.ledgerEntries
-      .filter((l) => l.type === 'RELEASE')
-      .reduce((s, l) => s + l.amountMinor, 0);
-    const outstanding = reserved - released;
-    if (outstanding <= 0) return { releasedMinor: 0 };
-
-    await tx.ledgerEntry.create({
-      data: {
-        userId: input.userId,
-        transactionId: transaction.id,
-        type: 'RELEASE',
-        amountMinor: outstanding,
-        currency: transaction.currency,
-      },
-    });
-    await appendAuditEvent(tx, {
-      actorType: input.actor.type,
-      actorId: input.actor.id,
-      userId: input.userId,
-      transactionId: transaction.id,
-      action: 'purchase.reservation_released',
-      data: { releasedMinor: outstanding, currency: transaction.currency, reason: input.reason },
-    });
-    return { releasedMinor: outstanding };
+    return releaseWithinTransaction(tx, input);
   });
 }

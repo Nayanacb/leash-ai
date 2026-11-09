@@ -83,4 +83,19 @@ Only needed to translate natural-language policies. Everything else — includin
 | `LLM_POLICY_COMPILER_TIMEOUT_MS` | No (60000)      | Request timeout, 5000–300000.                                                                                                                     |
 | `LLM_POLICY_COMPILER_EFFORT`     | No              | `low`…`max`. Leave empty unless the chosen model supports the `effort` parameter.                                                                 |
 
-Without a key, the Policies page explains that compilation isn't configured (HTTP 503 `LLM_NOT_CONFIGURED`). The compiler's output is always a draft: nothing it produces is enforced until you review and confirm it with your password.
+Without a key, the Policies page explains that compilation isn't configured (HTTP 503 `LLM_NOT_CONFIGURED`) and opens the **JSON** editor instead: you can write the policy JSON yourself, with no AI involved. Either way the result is a draft: nothing is enforced until you review and confirm it with your password.
+
+To verify the live Anthropic integration once the key and model are set (one request, fixed sample text, the key is never printed):
+
+```bash
+npm run llm:smoke -w @leash/server
+```
+
+Exit code 0 means the API accepted the structured-output request and the response passed strict validation; 1 means it failed (the reason is printed); 2 means it isn't configured.
+
+### Reservation recovery
+
+| Variable                             | Default       | Meaning                                                                                      |
+| ------------------------------------ | ------------- | -------------------------------------------------------------------------------------------- |
+| `EVALUATION_TIMEOUT_SECONDS`         | 120 (30–3600) | A purchase still being evaluated after this long is expired and its reserved funds released. |
+| `RESERVATION_SWEEP_INTERVAL_SECONDS` | 30 (5–3600)   | How often the server runs that sweep (it also runs once at startup).                         |

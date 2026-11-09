@@ -15,6 +15,8 @@ const FILTERS = [
   { label: 'API keys', value: 'agent_key.' },
   { label: 'Merchants', value: 'merchant.' },
   { label: 'Tasks', value: 'task.' },
+  { label: 'Policies', value: 'policy.' },
+  { label: 'Purchases', value: 'purchase.' },
 ];
 
 /** Plain-language summary of an event; the full JSON is available on expand. */
@@ -62,12 +64,45 @@ function describe(event: AuditEventDto): string {
       return 'Task cancelled';
     case 'task.completed':
       return 'Task completed';
+    case 'user.step_up_failed':
+      return 'Wrong password at a confirmation prompt';
+    case 'policy.draft_compiled':
+      return `Policy draft v${String(d.version ?? '?')} translated from plain English`;
+    case 'policy.draft_created_from_json':
+      return `Policy draft v${String(d.version ?? '?')} created from JSON`;
+    case 'policy.draft_edited':
+      return 'Policy draft edited by hand';
+    case 'policy.draft_duplicated':
+      return `Policy v${String(d.fromVersion ?? '?')} copied into a new draft`;
+    case 'policy.draft_rejected':
+      return 'Policy draft discarded';
+    case 'policy.compile_failed':
+      return `Policy translation failed (${str('reason')})`;
+    case 'policy.compile_rejected':
+      return 'Policy translation produced invalid rules and was rejected';
+    case 'policy.confirmed':
+      return `Policy v${String(d.version ?? '?')} confirmed and enforced`;
+    case 'policy.paused':
+      return 'All spending paused (policy deactivated)';
+    case 'purchase.policy_evaluated':
+      return `Purchase checked against policy: ${str('policyDecision')}`;
+    case 'purchase.reservation_released':
+      return `Reserved funds released (${str('reason').replaceAll('_', ' ')})`;
+    case 'purchase.evaluation_expired':
+      return 'Purchase evaluation timed out; funds released';
     default:
       return event.action;
   }
 }
 
-const WARNING_ACTIONS = new Set(['user.login_failed', 'agent.auth_rejected']);
+const WARNING_ACTIONS = new Set([
+  'user.login_failed',
+  'agent.auth_rejected',
+  'user.step_up_failed',
+  'policy.paused',
+  'policy.compile_rejected',
+  'purchase.evaluation_expired',
+]);
 
 export function AuditPage() {
   const [filter, setFilter] = useState('');

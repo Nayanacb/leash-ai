@@ -1,5 +1,6 @@
 import {
   CompilePolicyInputSchema,
+  CreateDraftFromJsonInputSchema,
   ConfirmPolicyInputSchema,
   IdParamSchema,
   PausePolicyInputSchema,
@@ -15,6 +16,7 @@ import {
   budgetStatus,
   compilePolicy,
   confirmPolicy,
+  createDraftFromJson,
   duplicateVersion,
   getActivePolicy,
   getPolicyVersion,
@@ -54,6 +56,17 @@ export function policiesRouter(ctx: AppContext): Router {
     res
       .status(201)
       .json(await compilePolicy({ ...deps, compiler: ctx.policyCompiler }, actorFrom(req), input));
+  });
+
+  /** Whether natural-language translation is available (an LLM is configured). */
+  router.get('/policies/compiler-status', (_req, res) => {
+    res.json({ configured: ctx.policyCompiler !== null });
+  });
+
+  /** JSON → DRAFT, with no LLM involved. */
+  router.post('/policies/drafts', async (req, res) => {
+    const input = CreateDraftFromJsonInputSchema.parse(req.body);
+    res.status(201).json(await createDraftFromJson(deps, actorFrom(req), input));
   });
 
   /** Deterministic validation + rendering of hand-edited JSON, without saving. */

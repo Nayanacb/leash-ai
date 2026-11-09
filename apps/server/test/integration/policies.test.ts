@@ -548,3 +548,118 @@ describe('isolation', () => {
     expect((await b.user.get('/api/v1/policies/versions')).body.versions).toEqual([]);
   });
 });
+
+describe('drafts written as JSON (no LLM)', () => {
+  const { app: noLlm } = makeApp({ policyCompiler: null });
+
+  async function setupWithoutLlm() {
+    const user = await UserClient.register(noLlm);
+    const agent = await user.createAgent();
+    const merchant = await user.createMerchant({ displayName: 'Cable Co' });
+    const task = await user.createTask({
+      agentId: agent.id,
+      merchantIds: [merchant.id],
+      budget: '400.00',
+    });
+    return { user, agent, merchant, task };
+  }
+
+  const document = (rules: unknown[]) => ({
+    dslVersion: 1,
+    currency: 'USD',
+    timezone: 'UTC',
+    rules,
+  });
+
+  it('reports whether translation is available', async () => {
+    const { user } = await setupWithoutLlm();
+    expect((await user.get('/api/v1/policies/compiler-status')).body).toEqual({
+      configured: false,
+    });
+    const withLlm = await UserClient.register(app);
+    expect((await withLlm.get('/api/v1/policies/compiler-status')).body).toEqual({
+      configured: true,
+    });
+  });
+
+  it('creates a reviewable DRAFT without any LLM, then confirms and enforces it', async () => {
+    const s = await setupWithoutLlm();
+    const res = await s.user.post('/api/v1/policies/drafts', {
+      sourceText: 'Cap purchases at $30.',
+      compiledRules: document([
+        { id: 'cap', type: 'max_amount_per_transaction', amountMinor: 3000, action: 'BLOCK' },
+      ]),
+    });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      status: 'DRAFT',
+      version: 1,
+      sourceText: 'Cap purchases at $30.',
+      compilerModel: 'none (written as JSON)',
+      editedManually: true,
+      unmappedClauses: [],
+      rendered: [{ id: 'cap', action: 'BLOCK', text: 'Block any single purchase over 30.00 USD.' }],
+    });
+    const audit = await db().auditEvent.findFirst({
+      where: { userId: s.user.user.id, action: 'policy.draft_created_from_json' },
+    });
+    expect(audit?.data).toMatchObject({
+      policyVersionId: res.body.id,
+      rulesHash: res.body.rulesHash,
+    });
+
+    // Inert until confirmed, like every draft.
+    expect((await purchase(s, 100)).reasonCodes).toEqual(['NO_ACTIVE_POLICY']);
+    await confirm(s.user, res.body).expect(200);
+    expect((await purchase(s, 3000)).policyDecision).toBe('ALLOW');
+    expect((await purchase(s, 3001)).reasonCodes).toEqual(['AMOUNT_OVER_LIMIT']);
+  });
+
+  it('defaults the description when none is given', async () => {
+    const { user } = await setupWithoutLlm();
+    const res = await user.post('/api/v1/policies/drafts', { compiledRules: document([]) });
+    expect(res.body.sourceText).toBe('Written directly as policy JSON.');
+  });
+
+  it.each([
+    ['not an object', 'just a string'],
+    [
+      'wrong field type',
+      document([
+        { id: 'cap', type: 'max_amount_per_transaction', amountMinor: '30', action: 'BLOCK' },
+      ]),
+    ],
+    ['unknown rule type', document([{ id: 'x', type: 'approve_everything', action: 'BLOCK' }])],
+    ['missing currency', { dslVersion: 1, timezone: 'UTC', rules: [] }],
+  ])(
+    'rejects invalid JSON (%s) with field paths and creates nothing',
+    async (_name, compiledRules) => {
+      const { user } = await setupWithoutLlm();
+      const res = await user.post('/api/v1/policies/drafts', { compiledRules });
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe('POLICY_INVALID');
+      expect(res.body.error.details.length).toBeGreaterThan(0);
+      expect(await db().policyVersion.count({ where: { userId: user.user.id } })).toBe(0);
+    },
+  );
+
+  it('rejects another user’s merchant IDs', async () => {
+    const a = await setupWithoutLlm();
+    const b = await setupWithoutLlm();
+    const res = await a.user.post('/api/v1/policies/drafts', {
+      compiledRules: document([
+        { id: 'x', type: 'merchant_allowlist', merchantIds: [b.merchant.id], action: 'BLOCK' },
+      ]),
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error.details[0].message).toContain('unknown merchant');
+  });
+
+  it('requires a signed-in user and a CSRF token', async () => {
+    const { user } = await setupWithoutLlm();
+    const res = await user.http
+      .post('/api/v1/policies/drafts')
+      .send({ compiledRules: document([]) });
+    expect(res.status).toBe(403);
+  });
+});

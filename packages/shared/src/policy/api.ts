@@ -21,6 +21,15 @@ export const CompilePolicyInputSchema = z.object({
 
 export const ValidatePolicyInputSchema = z.object({ compiledRules: z.unknown() });
 
+/** Create a DRAFT straight from policy JSON — no LLM involved. */
+export const CreateDraftFromJsonInputSchema = z.object({
+  compiledRules: z.unknown(),
+  /** Optional note describing the policy in your own words (shown as "What you wrote"). */
+  sourceText: plainText(1, MAX_POLICY_SOURCE_LENGTH).optional(),
+});
+
+export const CompilerStatusResponseSchema = z.object({ configured: z.boolean() });
+
 export const PolicyValidationResponseSchema = z.object({
   valid: z.boolean(),
   errors: z.array(z.object({ path: z.string(), message: z.string() })),

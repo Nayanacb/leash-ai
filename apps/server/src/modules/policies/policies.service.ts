@@ -328,6 +328,40 @@ export async function updateDraft(
   return toDto(updated, ctx.names, config);
 }
 
+/** Marker stored in compilerModel for drafts written as JSON (no LLM involved). */
+export const JSON_DRAFT_SOURCE = 'none (written as JSON)';
+
+/**
+ * Creates a DRAFT directly from policy JSON, without the LLM. Validated
+ * exactly like compiler output; reviewed and confirmed exactly like any draft.
+ */
+export async function createDraftFromJson(
+  { db, config }: Deps,
+  actor: Actor,
+  input: { compiledRules: unknown; sourceText?: string | undefined },
+): Promise<PolicyVersionDto> {
+  const ctx = await merchantContext(db, actor.userId);
+  const result = validatePolicyDocument(input.compiledRules, ctx.ids);
+  if (!result.valid)
+    throw new AppError(400, 'POLICY_INVALID', 'The policy JSON is invalid', result.errors);
+  const created = await createDraft(
+    db,
+    actor,
+    {
+      sourceText: input.sourceText ?? 'Written directly as policy JSON.',
+      document: result.document,
+      rulesHash: result.rulesHash,
+      compilerModel: JSON_DRAFT_SOURCE,
+      promptVersion: 'n/a',
+      unmappedClauses: [],
+      assumptions: [],
+      editedManually: true,
+    },
+    { action: 'policy.draft_created_from_json', data: {} },
+  );
+  return toDto(created, ctx.names, config);
+}
+
 /** Copies any of the user's versions into a new DRAFT (e.g. to restore a paused or superseded policy). */
 export async function duplicateVersion(
   { db, config }: Deps,
