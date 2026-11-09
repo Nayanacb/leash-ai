@@ -1,0 +1,24 @@
+# Local development database only. Credentials here are for local dev and must never be reused elsewhere.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: leash-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: leash
+      POSTGRES_PASSWORD: leash_dev_password
+      POSTGRES_DB: leash
+    ports:
+      # Host port 5433 avoids clashing with a locally installed Postgres on 5432.
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - leash-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U leash -d leash']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  leash-pgdata:

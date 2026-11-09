@@ -1,0 +1,168 @@
+import {
+  DEFAULT_APPROVAL_TTL_MINUTES,
+  DEFAULT_AUTHORIZATION_TTL_MINUTES,
+  SANDBOX_MAX_TRANSACTION_MINOR,
+} from '@leash/shared';
+import { z } from 'zod';
+import { findLivePayPalReferences, PAYPAL_SANDBOX_API_BASE } from './paypalSandbox.js';
+
+/** Treats unset and blank variables the same, so `.env` placeholders like `FOO=` are "unset". */
+const optionalString = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z.string().trim().min(1).optional(),
+);
+
+/** Model IDs are configuration, never hard-coded; we only check the shape here. */
+const optionalModelId = z.preprocess(
+  (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+  z
+    .string()
+    .trim()
+    .regex(/^[a-z0-9][a-z0-9._:@/-]{1,127}$/i, 'must look like a model identifier')
+    .optional(),
+);
+
+const postgresUrl = z
+  .string()
+  .min(1)
+  .refine((v) => /^postgres(ql)?:\/\//.test(v), 'must be a postgres:// or postgresql:// URL');
+
+export const EnvSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    HOST: z.string().min(1).default('127.0.0.1'),
+    PORT: z.coerce.number().int().min(1).max(65535).default(4000),
+    LOG_LEVEL: z
+      .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
+      .default('info'),
+
+    DATABASE_URL: postgresUrl,
+    WEB_ORIGIN: z.url().default('http://localhost:5173'),
+
+    PAYPAL_ENV: z.literal('sandbox', {
+      error: 'PAYPAL_ENV must be "sandbox". Live PayPal is not permitted.',
+    }),
+    PAYPAL_CLIENT_ID: optionalString,
+    PAYPAL_CLIENT_SECRET: optionalString,
+    PAYPAL_WEBHOOK_ID: optionalString,
+
+    ANTHROPIC_API_KEY: optionalString,
+    LLM_MODEL_POLICY_COMPILER: optionalModelId,
+    LLM_MODEL_CLASSIFIER: optionalModelId,
+
+    APPROVAL_TTL_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(1440)
+      .default(DEFAULT_APPROVAL_TTL_MINUTES),
+    AUTHORIZATION_TTL_MINUTES: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(120)
+      .default(DEFAULT_AUTHORIZATION_TTL_MINUTES),
+    SANDBOX_MAX_TRANSACTION_MINOR: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(SANDBOX_MAX_TRANSACTION_MINOR, {
+        error: `SANDBOX_MAX_TRANSACTION_MINOR may not exceed ${SANDBOX_MAX_TRANSACTION_MINOR} ($500.00)`,
+      })
+      .default(SANDBOX_MAX_TRANSACTION_MINOR),
+  })
+  .superRefine((env, ctx) => {
+    if (Boolean(env.PAYPAL_CLIENT_ID) !== Boolean(env.PAYPAL_CLIENT_SECRET)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['PAYPAL_CLIENT_SECRET'],
+        message: 'PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET must be set together',
+      });
+    }
+  });
+
+export type Env = z.infer<typeof EnvSchema>;
+
+export interface AppConfig {
+  nodeEnv: Env['NODE_ENV'];
+  isProduction: boolean;
+  host: string;
+  port: number;
+  logLevel: Env['LOG_LEVEL'];
+  databaseUrl: string;
+  webOrigin: string;
+  paypal: {
+    environment: 'sandbox';
+    apiBase: typeof PAYPAL_SANDBOX_API_BASE;
+    clientId: string | undefined;
+    clientSecret: string | undefined;
+    webhookId: string | undefined;
+    /** True once sandbox credentials are present (required from Phase 7). */
+    configured: boolean;
+  };
+  llm: {
+    apiKey: string | undefined;
+    policyCompilerModel: string | undefined;
+    classifierModel: string | undefined;
+    /** True once the key and both model IDs are present (required from Phase 4). */
+    configured: boolean;
+  };
+  limits: {
+    approvalTtlMinutes: number;
+    authorizationTtlMinutes: number;
+    sandboxMaxTransactionMinor: number;
+  };
+}
+
+export class ConfigError extends Error {
+  constructor(public readonly problems: string[]) {
+    super(`Invalid configuration:\n  - ${problems.join('\n  - ')}`);
+    this.name = 'ConfigError';
+  }
+}
+
+/** Validates raw environment variables. Pure: does not read process.env itself. */
+export function parseConfig(raw: Record<string, string | undefined>): AppConfig {
+  const problems = findLivePayPalReferences(raw);
+  const result = EnvSchema.safeParse(raw);
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      problems.push(`${issue.path.join('.') || '(root)'}: ${issue.message}`);
+    }
+  }
+  if (problems.length > 0 || !result.success) {
+    throw new ConfigError(problems);
+  }
+  const env = result.data;
+
+  return {
+    nodeEnv: env.NODE_ENV,
+    isProduction: env.NODE_ENV === 'production',
+    host: env.HOST,
+    port: env.PORT,
+    logLevel: env.LOG_LEVEL,
+    databaseUrl: env.DATABASE_URL,
+    webOrigin: env.WEB_ORIGIN,
+    paypal: {
+      environment: 'sandbox',
+      apiBase: PAYPAL_SANDBOX_API_BASE,
+      clientId: env.PAYPAL_CLIENT_ID,
+      clientSecret: env.PAYPAL_CLIENT_SECRET,
+      webhookId: env.PAYPAL_WEBHOOK_ID,
+      configured: Boolean(env.PAYPAL_CLIENT_ID && env.PAYPAL_CLIENT_SECRET),
+    },
+    llm: {
+      apiKey: env.ANTHROPIC_API_KEY,
+      policyCompilerModel: env.LLM_MODEL_POLICY_COMPILER,
+      classifierModel: env.LLM_MODEL_CLASSIFIER,
+      configured: Boolean(
+        env.ANTHROPIC_API_KEY && env.LLM_MODEL_POLICY_COMPILER && env.LLM_MODEL_CLASSIFIER,
+      ),
+    },
+    limits: {
+      approvalTtlMinutes: env.APPROVAL_TTL_MINUTES,
+      authorizationTtlMinutes: env.AUTHORIZATION_TTL_MINUTES,
+      sandboxMaxTransactionMinor: env.SANDBOX_MAX_TRANSACTION_MINOR,
+    },
+  };
+}

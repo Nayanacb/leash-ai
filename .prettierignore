@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+package-lock.json
+apps/server/src/generated
+apps/server/prisma/migrations/**/migration.sql
+docs

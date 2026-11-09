@@ -1,0 +1,39 @@
+{
+  "name": "leash",
+  "private": true,
+  "description": "Spending firewall for AI agents",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,magenta \"npm:dev -w @leash/server\" \"npm:dev -w @leash/web\"",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run test --workspaces --if-present",
+    "test:integration": "npm run test:integration -w @leash/server",
+    "db:up": "docker compose up -d --wait db",
+    "db:down": "docker compose down",
+    "db:migrate": "npm run db:migrate -w @leash/server",
+    "db:generate": "npm run db:generate -w @leash/server"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^10.0.7",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}
