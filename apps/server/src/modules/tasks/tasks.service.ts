@@ -14,6 +14,10 @@ import type { Prisma, Task } from '../../generated/prisma/client.js';
 import { AppError } from '../../lib/errors.js';
 import type { Actor } from '../agents/agents.service.js';
 import { appendAuditEvent } from '../audit/auditLog.js';
+import {
+  committedByTask,
+  effectiveTaskStatus as ledgerEffectiveTaskStatus,
+} from '../budget/ledger.js';
 
 const MIN_LEAD_TIME_MS = 60_000;
 const DAY_MS = 86_400_000;
@@ -25,9 +29,7 @@ export function effectiveTaskStatus(
   task: Pick<Task, 'status' | 'expiresAt'>,
   now = new Date(),
 ): TaskStatus {
-  if (task.status === 'ACTIVE' && task.expiresAt && task.expiresAt.getTime() <= now.getTime())
-    return 'EXPIRED';
-  return task.status;
+  return ledgerEffectiveTaskStatus(task, now);
 }
 
 function whereEffectiveStatus(
@@ -44,19 +46,6 @@ function whereEffectiveStatus(
     default:
       return { status };
   }
-}
-
-/** Committed spend per task from the append-only ledger: Σ RESERVE − Σ RELEASE − Σ REFUND. */
-async function committedByTask(db: Database, taskIds: string[]): Promise<Map<string, number>> {
-  if (taskIds.length === 0) return new Map();
-  const rows = await db.$queryRaw<{ taskId: string; committed: bigint }[]>`
-    SELECT t."taskId" AS "taskId",
-           COALESCE(SUM(CASE WHEN l."type" = 'RESERVE' THEN l."amountMinor" ELSE -l."amountMinor" END), 0)::bigint AS committed
-      FROM "LedgerEntry" l
-      JOIN "Transaction" t ON t."id" = l."transactionId"
-     WHERE t."taskId" = ANY(${taskIds}::uuid[])
-     GROUP BY t."taskId"`;
-  return new Map(rows.map((r) => [r.taskId, Number(r.committed)]));
 }
 
 async function merchantsById(db: Database, userId: string, tasks: Task[]) {

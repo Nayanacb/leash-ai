@@ -217,6 +217,10 @@ model PolicyVersion {
   promptVersion   String
   /// Clauses the compiler could not express in the DSL; must be acknowledged before confirming.
   unmappedClauses Json                @default("[]")
+  /// Interpretation choices the compiler made (e.g. "weekly" read as Monday–Sunday).
+  assumptions     Json                @default("[]")
+  /// True if the user edited the compiled JSON by hand before confirming.
+  editedManually  Boolean             @default(false)
   confirmedAt     DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt

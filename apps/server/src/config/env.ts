@@ -54,6 +54,17 @@ export const EnvSchema = z
     ANTHROPIC_API_KEY: optionalString,
     LLM_MODEL_POLICY_COMPILER: optionalModelId,
     LLM_MODEL_CLASSIFIER: optionalModelId,
+    /** Per-request timeout for policy compilation. Compilation is interactive but not latency-critical. */
+    LLM_POLICY_COMPILER_TIMEOUT_MS: z.coerce.number().int().min(5_000).max(300_000).default(60_000),
+    /**
+     * Optional `output_config.effort` for the compiler. Leave unset unless your
+     * chosen model supports the effort parameter (sending it to a model that
+     * does not will fail the request).
+     */
+    LLM_POLICY_COMPILER_EFFORT: z.preprocess(
+      (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+      z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
+    ),
 
     APPROVAL_TTL_MINUTES: z.coerce
       .number()
@@ -117,7 +128,11 @@ export interface AppConfig {
     apiKey: string | undefined;
     policyCompilerModel: string | undefined;
     classifierModel: string | undefined;
-    /** True once the key and both model IDs are present (required from Phase 4). */
+    policyCompilerTimeoutMs: number;
+    policyCompilerEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | undefined;
+    /** True once the API key and the compiler model are set (needed to compile policies). */
+    policyCompilerConfigured: boolean;
+    /** True once the key and both model IDs are present. */
     configured: boolean;
   };
   limits: {
@@ -174,6 +189,9 @@ export function parseConfig(raw: Record<string, string | undefined>): AppConfig 
       apiKey: env.ANTHROPIC_API_KEY,
       policyCompilerModel: env.LLM_MODEL_POLICY_COMPILER,
       classifierModel: env.LLM_MODEL_CLASSIFIER,
+      policyCompilerTimeoutMs: env.LLM_POLICY_COMPILER_TIMEOUT_MS,
+      policyCompilerEffort: env.LLM_POLICY_COMPILER_EFFORT,
+      policyCompilerConfigured: Boolean(env.ANTHROPIC_API_KEY && env.LLM_MODEL_POLICY_COMPILER),
       configured: Boolean(
         env.ANTHROPIC_API_KEY && env.LLM_MODEL_POLICY_COMPILER && env.LLM_MODEL_CLASSIFIER,
       ),

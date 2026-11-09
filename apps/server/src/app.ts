@@ -20,6 +20,9 @@ import { auditRouter } from './modules/audit/audit.routes.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { merchantsRouter } from './modules/merchants/merchants.routes.js';
 import { tasksRouter } from './modules/tasks/tasks.routes.js';
+import { policiesRouter } from './modules/policies/policies.routes.js';
+import type { PolicyCompiler } from './modules/policies/compiler.js';
+import { policyCompilerFromConfig } from './llm/index.js';
 import { healthRouter } from './routes/health.js';
 
 export interface AppDeps {
@@ -30,13 +33,17 @@ export interface AppDeps {
   probe?: DatabaseProbe;
   version: string;
   rateLimits?: Partial<RateLimitSettings>;
+  /** Override the policy compiler (tests). Defaults to the configured Anthropic compiler, or null. */
+  policyCompiler?: PolicyCompiler | null;
 }
 
 export function createApp(deps: AppDeps): Express {
   const { config, logger, db } = deps;
   const app = express();
   const limiters = createRateLimiters({ ...DEFAULT_RATE_LIMITS, ...deps.rateLimits });
-  const ctx: AppContext = { config, db, logger, limiters };
+  const policyCompiler =
+    deps.policyCompiler !== undefined ? deps.policyCompiler : policyCompilerFromConfig(config);
+  const ctx: AppContext = { config, db, logger, limiters, policyCompiler };
   const probe = deps.probe ?? databaseProbe(db);
 
   app.disable('x-powered-by');
@@ -86,7 +93,13 @@ export function createApp(deps: AppDeps): Express {
   userApi.use(authRouter(ctx));
   // Everything below requires a signed-in user, and a CSRF token on mutations.
   userApi.use(requireUser, requireCsrf);
-  userApi.use(agentsRouter(ctx), merchantsRouter(ctx), tasksRouter(ctx), auditRouter(ctx));
+  userApi.use(
+    agentsRouter(ctx),
+    merchantsRouter(ctx),
+    tasksRouter(ctx),
+    policiesRouter(ctx),
+    auditRouter(ctx),
+  );
   app.use('/api/v1', userApi);
 
   // ── Agent API: bearer API keys only ─────────────────────────────────────

@@ -13,7 +13,8 @@ The full design lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | 1     | Architecture                                                                  | Done     |
 | 2     | Foundations: monorepo, schema, config + sandbox guard, logging, health, shell | Done     |
 | 3     | Identity & setup: auth, agents + API keys, merchants, tasks, audit log        | Done     |
-| 4+    | Policy engine, evaluation, approvals, PayPal, webhooks, refunds               | Upcoming |
+| 4     | Policy compiler, deterministic engine, budget ledger, policy review UI        | Done     |
+| 5+    | Evaluation pipeline, approvals, PayPal, webhooks, refunds                     | Upcoming |
 
 ## Repository layout
 
@@ -67,5 +68,19 @@ All server configuration is validated at startup (`apps/server/src/config/env.ts
 
 - `PAYPAL_ENV` must be `sandbox`; any `PAYPAL_*` variable referencing a live PayPal host is rejected.
 - `SANDBOX_MAX_TRANSACTION_MINOR` defaults to `50000` ($500) and cannot be raised above it.
-- Anthropic model IDs (`LLM_MODEL_POLICY_COMPILER`, `LLM_MODEL_CLASSIFIER`) are configuration, not code. They are not needed until Phase 4.
+- Anthropic model IDs are configuration, never code. See below.
 - PayPal sandbox credentials are not needed until Phase 7. They live only in the server's environment.
+
+### Anthropic (policy compilation)
+
+Only needed to translate natural-language policies. Everything else — including enforcing an already-confirmed policy — works without it. Set these in `apps/server/.env` (never commit that file):
+
+| Variable                         | Required        | Meaning                                                                                                                                           |
+| -------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`              | Yes, to compile | Server-side only; never sent to agents or the browser.                                                                                            |
+| `LLM_MODEL_POLICY_COMPILER`      | Yes, to compile | Exact model ID (no default). Must support structured outputs. Look IDs up in Anthropic's model docs or `GET https://api.anthropic.com/v1/models`. |
+| `LLM_MODEL_CLASSIFIER`           | Phase 5         | Model ID for intent verification and injection classification.                                                                                    |
+| `LLM_POLICY_COMPILER_TIMEOUT_MS` | No (60000)      | Request timeout, 5000–300000.                                                                                                                     |
+| `LLM_POLICY_COMPILER_EFFORT`     | No              | `low`…`max`. Leave empty unless the chosen model supports the `effort` parameter.                                                                 |
+
+Without a key, the Policies page explains that compilation isn't configured (HTTP 503 `LLM_NOT_CONFIGURED`). The compiler's output is always a draft: nothing it produces is enforced until you review and confirm it with your password.

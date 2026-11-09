@@ -46,3 +46,18 @@ describe('apiSend', () => {
     expect((err as ApiRequestError).fieldErrors).toEqual([{ path: 'name', message: 'Required' }]);
   });
 });
+
+describe('isSessionEnded', () => {
+  it('treats only UNAUTHENTICATED as the end of the session', async () => {
+    const { isSessionEnded } = await import('./session');
+    expect(isSessionEnded(new ApiRequestError(401, 'UNAUTHENTICATED', 'Sign in'))).toBe(true);
+    expect(
+      isSessionEnded(new ApiRequestError(401, 'INVALID_PASSWORD', 'Password is incorrect')),
+    ).toBe(false);
+    expect(
+      isSessionEnded(new ApiRequestError(401, 'INVALID_CREDENTIALS', 'Invalid email or password')),
+    ).toBe(false);
+    expect(isSessionEnded(new ApiRequestError(403, 'CSRF_FAILED', 'x'))).toBe(false);
+    expect(isSessionEnded(new Error('network'))).toBe(false);
+  });
+});

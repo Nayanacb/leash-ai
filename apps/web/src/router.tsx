@@ -6,6 +6,8 @@ import { AuditPage } from './features/audit/AuditPage';
 import { LoginPage, PublicOnly, RegisterPage, RequireAuth } from './features/auth/AuthPages';
 import { OverviewPage } from './features/dashboard/OverviewPage';
 import { MerchantsPage } from './features/merchants/MerchantsPage';
+import { PoliciesPage } from './features/policies/PoliciesPage';
+import { PolicyReviewPage } from './features/policies/PolicyReviewPage';
 import { ComingSoonPage, NotFoundPage } from './features/placeholder/ComingSoonPage';
 import { TasksPage } from './features/tasks/TasksPage';
 
@@ -45,16 +47,8 @@ export const router = createBrowserRouter([
               />
             ),
           },
-          {
-            path: 'policies',
-            element: (
-              <ComingSoonPage
-                title="Policies"
-                phase={4}
-                description="Your spending rules, compiled and confirmed by you."
-              />
-            ),
-          },
+          { path: 'policies', element: <PoliciesPage /> },
+          { path: 'policies/versions/:id', element: <PolicyReviewPage /> },
           { path: 'tasks', element: <TasksPage /> },
           { path: 'agents', element: <AgentsPage /> },
           { path: 'agents/:id', element: <AgentDetailPage /> },

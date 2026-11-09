@@ -33,3 +33,19 @@ export function LifecycleStatus({ status }: { status: string }) {
   const label = status.charAt(0) + status.slice(1).toLowerCase();
   return <StatusPill tone={STATUS_TONES[status] ?? 'neutral'}>{label}</StatusPill>;
 }
+
+const DECISION_TONES: Record<string, Tone> = { ALLOW: 'ok', ESCALATE: 'warn', BLOCK: 'error' };
+const DECISION_LABELS: Record<string, string> = {
+  ALLOW: 'Allow',
+  ESCALATE: 'Ask me',
+  BLOCK: 'Block',
+};
+
+/** ALLOW / ESCALATE / BLOCK — used for decisions and for rule actions. */
+export function DecisionPill({ decision }: { decision: string }) {
+  return (
+    <StatusPill tone={DECISION_TONES[decision] ?? 'neutral'}>
+      {DECISION_LABELS[decision] ?? decision}
+    </StatusPill>
+  );
+}

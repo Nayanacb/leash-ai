@@ -11,6 +11,8 @@ export interface RateLimitSettings {
   loginFailuresPerAccountPer15Min: number;
   /** Agent API requests, per API key, per minute. */
   agentPerKeyPerMinute: number;
+  /** Policy compilations (paid LLM calls), per user, per hour. */
+  policyCompilesPerUserPerHour: number;
 }
 
 export const DEFAULT_RATE_LIMITS: RateLimitSettings = {
@@ -18,6 +20,7 @@ export const DEFAULT_RATE_LIMITS: RateLimitSettings = {
   authPerIpPer15Min: 30,
   loginFailuresPerAccountPer15Min: 10,
   agentPerKeyPerMinute: 120,
+  policyCompilesPerUserPerHour: 20,
 };
 
 const FIFTEEN_MINUTES = 15 * 60_000;
@@ -64,6 +67,11 @@ export function createRateLimiters(settings: RateLimitSettings) {
         const email = (req.body as { email?: unknown } | undefined)?.email;
         return `login:${typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : ''}`;
       },
+    }),
+    policyCompilePerUser: limiter({
+      windowMs: 60 * 60_000,
+      limit: settings.policyCompilesPerUserPerHour,
+      keyGenerator: (req) => `policy-compile:${req.auth?.user.id ?? 'anonymous'}`,
     }),
     agentPerKey: limiter({
       windowMs: 60_000,

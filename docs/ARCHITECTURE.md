@@ -343,7 +343,19 @@ User-initiated only (agents cannot refund in v1). Amount ≤ captured − alread
 
 User text → compiler model → DSL JSON → Zod validation (unknown rule types rejected) → sanity checks → **deterministic** English rendering (not LLM-written) + list of unmapped clauses that must be acknowledged → user confirms with step-up → ACTIVE (previous → SUPERSEDED). The $500 sandbox ceiling applies regardless of policy.
 
-DSL rule types: `max_amount_per_transaction`, `approval_above`, `max_spend_per_period` (day/week/month), `max_transactions_per_period`, `merchant_allowlist`, `merchant_blocklist`, `category_allowlist`, `category_blocklist`, `new_merchant`, `time_window`, `duplicate_window`, `currency_allowlist`. Each has an action: BLOCK or ESCALATE.
+**Policy DSL v1 (implemented in Phase 4)** — `packages/shared/src/policy/dsl.ts`. A document has `dslVersion: 1`, a single `currency`, an IANA `timezone`, and up to 50 rules. Each rule has a slug `id`, an `action` (`BLOCK` | `ESCALATE`) and one of 10 types: `max_amount_per_transaction`, `max_spend_per_period` (day/week/month), `max_transactions_per_period`, `merchant_allowlist`, `merchant_blocklist`, `category_allowlist`, `category_blocklist`, `new_merchant`, `time_window`, `duplicate_window`. A rule *matches* when its condition is met; any matched BLOCK → BLOCK, else any matched ESCALATE → ESCALATE, else ALLOW. (The Phase 1 sketch's `approval_above` is `max_amount_per_transaction` with `ESCALATE`; `currency_allowlist` became the single policy `currency`.)
+
+**Built-in rules** (always BLOCK, not removable by any policy): no active policy; sandbox ceiling (50,000 minor units); purchase currency ≠ policy currency; task not active; currency ≠ task currency; merchant not in the task; merchant archived; amount > remaining task budget.
+
+**Periods** are calendar periods in the policy time zone: day from 00:00, week Monday 00:00 → Monday 00:00, month from the 1st. Computed with the runtime's tz database (DST-aware). A purchase counts toward the period in which it was reserved.
+
+**Separation (enforced by lint):** `modules/authorization/policyEngine.ts` is a pure function — no I/O, no clock, no LLM. `modules/budget/ledger.ts` gathers spend facts and calls it. Neither may import `llm/`, `modules/evaluation/` or the Anthropic SDK. The compiler lives in `llm/` behind the `PolicyCompiler` interface in `modules/policies/compiler.ts`.
+
+**Reservations:** `reserveForPurchase()` runs in one DB transaction holding `pg_advisory_xact_lock(<budget namespace>, hashtext(userId))`: idempotency check → load ACTIVE policy (re-validated) → task and merchant (scoped to the user and agent) → spend snapshot from the ledger → engine → create Transaction (BLOCKED, or EVALUATING with funds held) + POLICY Evaluation + RESERVE ledger entry + audit event. `releaseReservation()` takes the same lock and is idempotent. Confirming or pausing a policy also takes the lock, so no evaluation straddles a policy switch.
+
+**Compiler (LLM) pipeline:** `POST /policies/compile` → Anthropic Messages API with the model from `LLM_MODEL_POLICY_COMPILER`, a versioned system prompt (`policy-compiler/v1`), the user's text in delimited tags, the user's non-archived merchants, and a JSON-schema structured output; no tools. `stop_reason` is checked (refusal/truncation → error), the text is parsed and validated against the output schema, then strictly against the DSL schema plus merchant ownership. Only then is a **DRAFT** stored (with model, prompt version, unmapped clauses and assumptions). Any failure creates nothing and is audited.
+
+**Review & confirmation:** the dashboard shows the deterministic rendering, unmapped clauses (must be acknowledged), compiler assumptions, a dry-run simulator against real spend, and the exact JSON (editable while DRAFT; edits are validated identically and flagged). Confirmation requires the password and the `rulesHash` that was on screen; the previous ACTIVE version becomes SUPERSEDED. "Pause all spending" deactivates the policy (password required); restoring means copying a version into a new draft and confirming it.
 
 ### 6.7 Future: PayPal Vault (autonomous payments)
 

@@ -9,6 +9,17 @@ import { ApiRequestError, apiGet, apiSend, apiSendNoContent, setCsrfToken } from
 
 export const SESSION_KEY = ['session'] as const;
 
+/**
+ * True only when the server says the session itself is gone (expired, idle,
+ * signed out elsewhere). Other 401s — a wrong password at a step-up prompt,
+ * bad login credentials — must not sign the user out.
+ */
+export function isSessionEnded(error: unknown): boolean {
+  return (
+    error instanceof ApiRequestError && error.status === 401 && error.code === 'UNAUTHENTICATED'
+  );
+}
+
 async function fetchSession(): Promise<SessionResponse | null> {
   try {
     const session = await apiGet('/api/v1/auth/session', SessionResponseSchema);

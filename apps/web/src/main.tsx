@@ -4,16 +4,12 @@ import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router';
 import './index.css';
 import { ApiRequestError } from './api/client';
-import { applySession } from './api/session';
+import { applySession, isSessionEnded } from './api/session';
 import { router } from './router';
 
 /** Any 401 means the session ended (expired, idle, or signed out elsewhere): drop to the login screen. */
 function onApiError(error: unknown) {
-  if (
-    error instanceof ApiRequestError &&
-    error.status === 401 &&
-    queryClient.getQueryData(['session'])
-  ) {
+  if (isSessionEnded(error) && queryClient.getQueryData(['session'])) {
     applySession(queryClient, null);
   }
 }
