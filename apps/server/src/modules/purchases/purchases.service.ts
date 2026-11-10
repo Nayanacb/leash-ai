@@ -26,6 +26,7 @@ import { lockUserBudget, releaseWithinTransaction, reserveForPurchase } from '..
 import type { PurchaseEvaluators, PurchaseForEvaluation } from '../evaluation/evaluators.js';
 import { runAiEvaluation, type AiEvaluationResult } from '../evaluation/pipeline.js';
 import { agentReasonCodes } from './reasons.js';
+import { purchaseSnapshotHash, type PurchaseSnapshot } from './snapshot.js';
 
 export interface PurchaseDeps {
   db: Database;
@@ -207,7 +208,7 @@ async function finalizeEvaluation(
     policy: PolicyEvaluation;
     combined: CombinedDecision;
     ai: AiEvaluationResult | null;
-    snapshot: Record<string, unknown>;
+    snapshot: Omit<PurchaseSnapshot, 'transactionId' | 'decision' | 'reasonCodes'>;
   },
 ): Promise<boolean> {
   return db.$transaction(async (tx) => {
@@ -223,14 +224,12 @@ async function finalizeEvaluation(
     // What a human approver will be shown (Phase 6 binds approval to this hash).
     const snapshotHash =
       decision === 'ESCALATE'
-        ? sha256Hex(
-            canonicalJson({
-              transactionId: input.transactionId,
-              ...input.snapshot,
-              decision,
-              reasonCodes,
-            }),
-          )
+        ? purchaseSnapshotHash({
+            transactionId: input.transactionId,
+            ...input.snapshot,
+            decision,
+            reasonCodes,
+          })
         : null;
     const authorizationExpiresAt =
       decision === 'ALLOW'

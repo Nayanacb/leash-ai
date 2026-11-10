@@ -1,5 +1,6 @@
 import {
   SessionResponseSchema,
+  StepUpResponseSchema,
   type LoginInput,
   type RegisterInput,
   type SessionResponse,
@@ -80,5 +81,26 @@ export function useLogout() {
       apiSendNoContent('POST', scope === 'all' ? '/api/v1/auth/logout-all' : '/api/v1/auth/logout'),
     // Clear local state even if the server call fails: the user asked to leave.
     onSettled: () => applySession(queryClient, null),
+  });
+}
+
+/** True while this session's step-up window is open (checked at call time, not during render). */
+export function isSteppedUp(
+  session: SessionResponse | null | undefined,
+  now = Date.now(),
+): boolean {
+  return Boolean(session?.stepUpExpiresAt && new Date(session.stepUpExpiresAt).getTime() > now);
+}
+
+/** Re-enter the password to unlock approvals for a few minutes on this session. */
+export function useStepUp() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (password: string) =>
+      apiSend('POST', '/api/v1/auth/step-up', { password }, StepUpResponseSchema),
+    onSuccess: ({ stepUpExpiresAt }) =>
+      queryClient.setQueryData<SessionResponse | null>(SESSION_KEY, (s) =>
+        s ? { ...s, stepUpExpiresAt } : s,
+      ),
   });
 }

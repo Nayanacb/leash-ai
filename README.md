@@ -15,7 +15,8 @@ The full design lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | 3     | Identity & setup: auth, agents + API keys, merchants, tasks, audit log        | Done     |
 | 4     | Policy compiler, deterministic engine, budget ledger, policy review UI        | Done     |
 | 5     | Purchase requests, injection + intent checks, decision combiner, transactions | Done     |
-| 6+    | Human approval UI, PayPal checkout, webhooks, refunds                         | Upcoming |
+| 6     | Human approval: queue, approve/reject with step-up + snapshot hash, expiry    | Done     |
+| 7+    | PayPal checkout, webhooks, refunds                                            | Upcoming |
 
 ## Repository layout
 
@@ -75,6 +76,17 @@ curl -s http://localhost:4000/api/agent/v1/purchase-requests \
 ```
 
 The response is `{ id, status, decision: ALLOW|ESCALATE|BLOCK, reasonCodes, approvalExpiresAt, authorizationExpiresAt }`. Retrying with the same `Idempotency-Key` returns the same purchase. `GET /purchase-requests/:id` polls; `POST /purchase-requests/:id/cancel` withdraws a pending or authorized purchase. No money moves yet (PayPal arrives in Phase 7).
+
+### Human approval (ESCALATE)
+
+An ESCALATE decision creates an approval and keeps the funds held. It appears on the **Approvals** page (the navigation badge shows how many are waiting) and on the transaction's detail page.
+
+- **Approve** shows the amount, the merchant, the PayPal account that would be paid and the item, then asks for your password if you haven't confirmed it in the last `STEP_UP_WINDOW_MINUTES` (default 5). The request carries the snapshot hash of what you saw. Before authorizing, the server re-checks the current policy, budget and task; if they would now block the purchase, approval is refused (409 `POLICY_NOW_BLOCKS`). If the purchase or the merchant's payee changed since, it is refused too (409 `SNAPSHOT_MISMATCH` / `SNAPSHOT_STALE`). On success the purchase is `AUTHORIZED` for `AUTHORIZATION_TTL_MINUTES`.
+- **Reject** needs no password; the held funds are released immediately.
+- Unanswered approvals expire after `APPROVAL_TTL_MINUTES` and release their funds. Nothing is ever approved automatically, and BLOCK decisions can't be approved.
+- The agent learns the outcome by polling `GET /purchase-requests/:id`: `AUTHORIZED` with reason `APPROVED`, or `REJECTED` with reason `REJECTED`.
+
+Dashboard endpoints: `GET /api/v1/approvals?status=PENDING|APPROVED|REJECTED|EXPIRED|CANCELLED`, `POST /api/v1/approvals/:id/approve` (`{ snapshotHash, note? }`; needs a recent `POST /api/v1/auth/step-up`), `POST /api/v1/approvals/:id/reject` (`{ note? }`).
 
 ## Configuration
 

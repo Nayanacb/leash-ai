@@ -116,7 +116,7 @@ describe('sessions', () => {
     const client = await UserClient.register(app);
     const res = await client.get('/api/v1/auth/session');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ user: client.user, csrfToken: client.csrf });
+    expect(res.body).toEqual({ user: client.user, csrfToken: client.csrf, stepUpExpiresAt: null });
   });
 
   it('is 401 without a session, with a forged cookie, and with an agent API key', async () => {

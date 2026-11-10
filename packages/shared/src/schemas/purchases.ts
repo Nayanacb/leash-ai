@@ -96,6 +96,8 @@ export const AgentReasonCodeSchema = z.enum([
   'APPROVAL_EXPIRED',
   'AUTHORIZATION_EXPIRED',
   'CANCELLED',
+  'APPROVED',
+  'REJECTED',
 ]);
 export type AgentReasonCode = z.infer<typeof AgentReasonCodeSchema>;
 
@@ -181,10 +183,14 @@ export const TransactionDetailDtoSchema = TransactionSummaryDtoSchema.extend({
   evaluations: z.array(EvaluationDtoSchema),
   approval: z
     .object({
+      id: z.uuid(),
       status: ApprovalStatusSchema,
       requestedAt: z.string(),
       expiresAt: z.string(),
       decidedAt: z.string().nullable(),
+      note: z.string().nullable(),
+      /** What the approver must confirm against (approve-what-you-saw). */
+      snapshotHash: z.string(),
     })
     .nullable(),
   authorizedAt: z.string().nullable(),
@@ -204,3 +210,45 @@ export const TransactionDetailDtoSchema = TransactionSummaryDtoSchema.extend({
   updatedAt: z.string(),
 });
 export type TransactionDetailDto = z.infer<typeof TransactionDetailDtoSchema>;
+
+// ── Approvals (user API) ───────────────────────────────────────────────────
+
+export const ApprovalListQuerySchema = z.object({
+  status: ApprovalStatusSchema.default('PENDING'),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+export const ApprovalDtoSchema = z.object({
+  id: z.uuid(),
+  status: ApprovalStatusSchema,
+  requestedAt: z.string(),
+  expiresAt: z.string(),
+  decidedAt: z.string().nullable(),
+  note: z.string().nullable(),
+  snapshotHash: z.string(),
+  /** Who would be paid: the merchant's PayPal account (from the registry). */
+  payee: z.string().nullable(),
+  transaction: TransactionSummaryDtoSchema,
+});
+export type ApprovalDto = z.infer<typeof ApprovalDtoSchema>;
+
+export const ApprovalListResponseSchema = z.object({
+  approvals: z.array(ApprovalDtoSchema),
+  /** Count of approvals still waiting (for the navigation badge). */
+  pendingCount: z.number().int().nonnegative(),
+});
+
+const ApprovalNoteSchema = z
+  .string()
+  .trim()
+  .max(500)
+  .optional()
+  .transform((v) => (v ? v : undefined));
+
+export const ApproveInputSchema = z.object({
+  /** The snapshot hash shown on screen; approval fails if the purchase changed since. */
+  snapshotHash: z.string().regex(/^[0-9a-f]{64}$/),
+  note: ApprovalNoteSchema,
+});
+
+export const RejectInputSchema = z.object({ note: ApprovalNoteSchema });

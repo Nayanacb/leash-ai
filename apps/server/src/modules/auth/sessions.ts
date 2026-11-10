@@ -55,7 +55,20 @@ export async function createSession(
 
 export interface ResolvedSession {
   sessionId: string;
+  /** Last successful step-up re-authentication for this session, if any. */
+  stepUpAt: Date | null;
   user: { id: string; email: string; createdAt: Date };
+}
+
+/** When this session's step-up stops counting, or null if there is no valid step-up. */
+export function stepUpExpiresAt(
+  config: AppConfig,
+  stepUpAt: Date | null,
+  now = new Date(),
+): Date | null {
+  if (!stepUpAt) return null;
+  const expires = new Date(stepUpAt.getTime() + config.session.stepUpWindowMs);
+  return expires.getTime() > now.getTime() ? expires : null;
 }
 
 /** Returns the session for a raw cookie token, or null if unknown, expired or idle too long. */
@@ -82,5 +95,5 @@ export async function resolveSession(
   if (now - session.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
     await db.session.updateMany({ where: { id: session.id }, data: { lastSeenAt: new Date(now) } });
   }
-  return { sessionId: session.id, user: session.user };
+  return { sessionId: session.id, stepUpAt: session.stepUpAt, user: session.user };
 }

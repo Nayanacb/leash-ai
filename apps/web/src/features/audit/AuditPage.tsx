@@ -66,6 +66,8 @@ function describe(event: AuditEventDto): string {
       return 'Task completed';
     case 'user.step_up_failed':
       return 'Wrong password at a confirmation prompt';
+    case 'user.step_up_succeeded':
+      return 'Password confirmed for sensitive actions';
     case 'policy.draft_compiled':
       return `Policy draft v${String(d.version ?? '?')} translated from plain English`;
     case 'policy.draft_created_from_json':
@@ -96,6 +98,10 @@ function describe(event: AuditEventDto): string {
       return `Purchase cancelled by the ${event.actorType.toLowerCase()}`;
     case 'purchase.approval_expired':
       return 'Approval window passed; purchase expired and funds released';
+    case 'purchase.approved':
+      return 'Purchase approved by you; payment authorized';
+    case 'purchase.rejected':
+      return 'Purchase rejected by you; funds released';
     case 'purchase.authorization_expired':
       return 'Authorized purchase was not paid in time; funds released';
     default:

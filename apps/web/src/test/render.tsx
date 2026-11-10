@@ -36,4 +36,5 @@ export const SESSION = {
     createdAt: '2026-01-01T00:00:00.000Z',
   },
   csrfToken: 'csrf-token-123',
+  stepUpExpiresAt: null,
 };

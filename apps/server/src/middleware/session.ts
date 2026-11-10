@@ -3,10 +3,11 @@ import { parseCookie } from 'cookie';
 import type { AppConfig } from '../config/env.js';
 import type { Database } from '../db.js';
 import { AppError } from '../lib/errors.js';
-import { resolveSession, sessionCookieName } from '../modules/auth/sessions.js';
+import { resolveSession, sessionCookieName, stepUpExpiresAt } from '../modules/auth/sessions.js';
 
 export interface SessionAuth {
   sessionId: string;
+  stepUpAt: Date | null;
   /** Raw cookie value; used only to derive/verify the CSRF token. Never logged or returned. */
   sessionToken: string;
   user: { id: string; email: string; createdAt: Date };
@@ -51,4 +52,19 @@ export const requireUser: RequestHandler = (req, _res, next) => {
 export function currentUser(req: Express.Request): SessionAuth['user'] {
   if (!req.auth) throw new AppError(401, 'UNAUTHENTICATED', 'Sign in to continue');
   return req.auth.user;
+}
+
+/**
+ * Requires a recent step-up re-authentication (POST /auth/step-up) on this
+ * very session. Used for actions that let money move, such as approving a
+ * purchase. A stolen-but-idle session can't approve without the password.
+ */
+export function requireRecentStepUp(config: AppConfig): RequestHandler {
+  return (req, _res, next) => {
+    if (!req.auth) throw new AppError(401, 'UNAUTHENTICATED', 'Sign in to continue');
+    if (!stepUpExpiresAt(config, req.auth.stepUpAt)) {
+      throw new AppError(403, 'STEP_UP_REQUIRED', 'Confirm your password to continue');
+    }
+    next();
+  };
 }

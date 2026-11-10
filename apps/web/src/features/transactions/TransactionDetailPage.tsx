@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router';
 import { z } from 'zod';
 import { useCancelTransaction, useTransaction } from '../../api/transactions';
 import { Button } from '../../components/ui/Button';
+import { ApprovalActions } from '../approvals/ApprovalActions';
 import { ErrorMessage, Loading } from '../../components/ui/Feedback';
 import { PageHeader, Panel, Table, Td, Th } from '../../components/ui/Layout';
 import { DecisionPill, LifecycleStatus, StatusPill } from '../../components/ui/StatusPill';
@@ -128,9 +129,21 @@ function TransactionDetail({ t }: { t: TransactionDetailDto }) {
           <p className="mt-1">
             {formatMoney(t.heldMinor, t.currency)} is held until{' '}
             {formatDateTime(t.approval.expiresAt)}. If nobody approves it by then, it expires and
-            the funds are released. Approve/reject arrives in a later release; you can cancel it
-            now.
+            the funds are released. Approving authorizes the payment for a limited time; rejecting
+            releases the funds immediately.
           </p>
+          <div className="mt-3">
+            <ApprovalActions
+              target={{
+                approvalId: t.approval.id,
+                snapshotHash: t.approval.snapshotHash,
+                amountLabel: formatMoney(t.amountMinor, t.currency),
+                merchantName: t.merchant?.displayName ?? 'Unknown merchant',
+                payee: t.merchantDetail?.paypalEmail ?? null,
+                itemDescription: t.itemDescription,
+              }}
+            />
+          </div>
         </div>
       )}
 

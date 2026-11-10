@@ -348,6 +348,17 @@ Idempotency: same agent + key + body → same transaction (201 first, then 200; 
 - **Humans can override ESCALATE only.** BLOCK is final; to allow it, the user confirms a new policy version and the agent resubmits.
 - The agent learns outcomes by polling (an outbound agent callback may come later).
 
+### 6.2a Human approval as implemented (Phase 6)
+
+- **Step-up** is per session: `POST /auth/step-up` (session + CSRF + password, shares the per-IP auth limiter) sets `Session.stepUpAt`; approve requires `now - stepUpAt < STEP_UP_WINDOW_MINUTES` (default 5, 1–30), else 403 `STEP_UP_REQUIRED`. A new session never inherits a step-up. Successes and failures are audited.
+- **Snapshot hash** (`modules/purchases/snapshot.ts`) covers transaction ID, amount, currency, merchant ID, **payee (merchant PayPal account)**, item description, quantity, task ID + instruction, decision and reason codes. Approve recomputes it from current data: a submitted hash that differs from the stored one → 409 `SNAPSHOT_MISMATCH`; a stored hash that no longer matches current data (for example, the merchant's PayPal account changed) → 409 `SNAPSHOT_STALE`. A merchant display-name change does not invalidate it.
+- **Order of checks**, all inside one DB transaction under the per-user budget lock: approval exists and belongs to the user (else 404) → already APPROVED returns the current state (idempotent) → PENDING (409 `APPROVAL_NOT_PENDING`) → unexpired (409 `APPROVAL_EXPIRED`) → transaction still PENDING_APPROVAL → snapshot → deterministic re-check → CAS approval → CAS transaction → audit `purchase.approved`.
+- **Re-check** uses the *current* active policy and the task's *current* status, and evaluates spend as of the reservation time **excluding the purchase's own reservation** (`loadSpendSnapshot(..., excludeTransactionId)`), so a purchase that exactly fills a limit can still be approved, while one that a newer, stricter policy, a pause or a cancelled task would block is refused (409 `POLICY_NOW_BLOCKS`, with the blocking rules). The re-check is the deterministic engine only; no LLM is called during approval.
+- **Reject** needs session + CSRF (no step-up), is idempotent, and releases the reservation exactly once (audit `purchase.rejected`).
+- **Races** (approve vs reject, approve vs agent cancel, approve vs expiry sweep) are serialized by the budget lock plus CAS: exactly one outcome wins and the loser gets 409.
+- **Agent view:** `AUTHORIZED` + reason `APPROVED`, or `REJECTED` + reason `REJECTED` (internal codes `HUMAN_APPROVED` / `HUMAN_REJECTED`).
+- **UI:** Approvals page (tabs by status, polled every 30 s, pending badge in the navigation) and approve/reject controls on the transaction detail page. The confirmation dialog shows the amount, merchant, payee and item exactly as hashed.
+
 ### 6.3 PayPal Checkout (separate checkpoint)
 
 - Server creates the order **only from stored, authorized values**: amount, currency, payee = registered merchant, `custom_id` = `invoice_id` = transaction ID, `intent=CAPTURE`, `PayPal-Request-Id` = transaction ID.

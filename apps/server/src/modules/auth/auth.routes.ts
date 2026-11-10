@@ -1,7 +1,9 @@
 import {
   LoginInputSchema,
   RegisterInputSchema,
+  StepUpInputSchema,
   type SessionResponse,
+  type StepUpResponse,
   type UserDto,
 } from '@leash/shared';
 import { Router, type Request, type Response } from 'express';
@@ -19,6 +21,7 @@ import {
   csrfTokenFor,
   sessionCookieName,
   sessionCookieOptions,
+  stepUpExpiresAt,
 } from './sessions.js';
 import { sha256Hex } from '../../lib/crypto.js';
 
@@ -41,7 +44,8 @@ export function authRouter(ctx: AppContext): Router {
 
   function sendSession(res: Response, status: number, user: UserDto, token: string) {
     res.cookie(cookieName, token, cookieOptions);
-    const body: SessionResponse = { user, csrfToken: csrfTokenFor(token) };
+    // A new session never inherits a step-up.
+    const body: SessionResponse = { user, csrfToken: csrfTokenFor(token), stepUpExpiresAt: null };
     res.status(status).json(body);
   }
 
@@ -134,6 +138,47 @@ export function authRouter(ctx: AppContext): Router {
     const body: SessionResponse = {
       user: toUserDto(auth.user),
       csrfToken: csrfTokenFor(auth.sessionToken),
+      stepUpExpiresAt: stepUpExpiresAt(config, auth.stepUpAt)?.toISOString() ?? null,
+    };
+    res.json(body);
+  });
+
+  /**
+   * Step-up re-authentication: confirms the password for THIS session and
+   * unlocks sensitive actions (approving purchases) for STEP_UP_WINDOW_MINUTES.
+   * Shares the per-IP auth limiter so it can't be used to guess passwords.
+   */
+  router.post('/auth/step-up', requireUser, requireCsrf, limiters.authPerIp, async (req, res) => {
+    const { password } = StepUpInputSchema.parse(req.body);
+    const user = currentUser(req);
+    const meta = requestMeta(req);
+    const stored = await db.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { passwordHash: true },
+    });
+    if (!(await verifyPassword(stored.passwordHash, password))) {
+      await recordAuditEvent(db, {
+        actorType: 'USER',
+        actorId: user.id,
+        userId: user.id,
+        action: 'user.step_up_failed',
+        data: { purpose: 'step_up', ...meta },
+      });
+      throw new AppError(401, 'INVALID_PASSWORD', 'Password is incorrect');
+    }
+    const now = new Date();
+    await db.$transaction(async (tx) => {
+      await tx.session.update({ where: { id: req.auth!.sessionId }, data: { stepUpAt: now } });
+      await appendAuditEvent(tx, {
+        actorType: 'USER',
+        actorId: user.id,
+        userId: user.id,
+        action: 'user.step_up_succeeded',
+        data: meta,
+      });
+    });
+    const body: StepUpResponse = {
+      stepUpExpiresAt: stepUpExpiresAt(config, now, now)!.toISOString(),
     };
     res.json(body);
   });

@@ -35,7 +35,14 @@ export type UserDto = z.infer<typeof UserDtoSchema>;
 export const SessionResponseSchema = z.object({
   user: UserDtoSchema,
   csrfToken: z.string().min(1),
+  /** Until when sensitive actions (approving purchases) are allowed without re-entering the password. */
+  stepUpExpiresAt: z.string().nullable(),
 });
 export type SessionResponse = z.infer<typeof SessionResponseSchema>;
 
 export const CSRF_HEADER = 'X-CSRF-Token';
+
+/** Step-up re-authentication: confirm the password before sensitive actions. */
+export const StepUpInputSchema = z.object({ password: z.string().min(1).max(256) });
+export const StepUpResponseSchema = z.object({ stepUpExpiresAt: z.string() });
+export type StepUpResponse = z.infer<typeof StepUpResponseSchema>;

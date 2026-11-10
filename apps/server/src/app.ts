@@ -25,6 +25,7 @@ import type { PolicyCompiler } from './modules/policies/compiler.js';
 import { policyCompilerFromConfig, purchaseEvaluatorsFromConfig } from './llm/index.js';
 import type { PurchaseEvaluators } from './modules/evaluation/evaluators.js';
 import { transactionsRouter } from './modules/purchases/transactions.routes.js';
+import { approvalsRouter } from './modules/approvals/approvals.routes.js';
 import { PURCHASE_REQUEST_MAX_BODY_BYTES } from '@leash/shared';
 import { healthRouter } from './routes/health.js';
 
@@ -114,6 +115,7 @@ export function createApp(deps: AppDeps): Express {
     tasksRouter(ctx),
     policiesRouter(ctx),
     transactionsRouter(ctx),
+    approvalsRouter(ctx),
     auditRouter(ctx),
   );
   app.use('/api/v1', userApi);

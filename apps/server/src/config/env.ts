@@ -46,6 +46,8 @@ export const EnvSchema = z
     SESSION_ABSOLUTE_TTL_HOURS: z.coerce.number().int().min(1).max(720).default(168),
     /** A session unused for this long is rejected. */
     SESSION_IDLE_TIMEOUT_MINUTES: z.coerce.number().int().min(5).max(10_080).default(720),
+    /** After re-entering the password, approvals are allowed without asking again for this long. */
+    STEP_UP_WINDOW_MINUTES: z.coerce.number().int().min(1).max(30).default(5),
 
     PAYPAL_ENV: z.literal('sandbox', {
       error: 'PAYPAL_ENV must be "sandbox". Live PayPal is not permitted.',
@@ -138,6 +140,8 @@ export interface AppConfig {
   session: {
     absoluteTtlMs: number;
     idleTimeoutMs: number;
+    /** How long a step-up re-authentication stays valid. */
+    stepUpWindowMs: number;
     /** Secure cookies (and the __Host- prefix) outside local development. */
     secureCookie: boolean;
   };
@@ -209,6 +213,7 @@ export function parseConfig(raw: Record<string, string | undefined>): AppConfig 
     session: {
       absoluteTtlMs: env.SESSION_ABSOLUTE_TTL_HOURS * 3_600_000,
       idleTimeoutMs: env.SESSION_IDLE_TIMEOUT_MINUTES * 60_000,
+      stepUpWindowMs: env.STEP_UP_WINDOW_MINUTES * 60_000,
       secureCookie: env.NODE_ENV === 'production',
     },
     paypal: {

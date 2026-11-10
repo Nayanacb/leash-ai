@@ -60,6 +60,9 @@ const DETAIL = {
     },
   ],
   approval: {
+    id: ID,
+    note: null,
+    snapshotHash: 'a'.repeat(64),
     status: 'PENDING',
     requestedAt: '2026-11-09T10:00:01.000Z',
     expiresAt: '2026-11-09T11:00:01.000Z',
@@ -92,6 +95,8 @@ describe('TransactionDetailPage', () => {
     expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
     expect(screen.getByText('approval_demand')).toBeInTheDocument();
     expect(screen.getByText('Waiting for your approval')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeInTheDocument();
   });
 
   it('cancels a pending purchase', async () => {

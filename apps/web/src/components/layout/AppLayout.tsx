@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router';
+import { useApprovals } from '../../api/approvals';
 import { useLogout, useSession } from '../../api/session';
 
 const NAV = [
@@ -46,6 +47,20 @@ function AccountMenu() {
   );
 }
 
+function PendingBadge() {
+  const approvals = useApprovals('PENDING');
+  const count = approvals.data?.pendingCount ?? 0;
+  if (count === 0) return null;
+  return (
+    <span
+      aria-label={`${count} waiting`}
+      className="ml-2 rounded-full bg-amber-500 px-1.5 py-0.5 text-xs font-semibold text-white"
+    >
+      {count}
+    </span>
+  );
+}
+
 export function AppLayout() {
   return (
     <div className="min-h-screen md:flex">
@@ -80,6 +95,7 @@ export function AppLayout() {
               }
             >
               {item.label}
+              {item.to === '/approvals' && <PendingBadge />}
             </NavLink>
           ))}
         </nav>

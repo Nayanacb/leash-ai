@@ -62,6 +62,8 @@ export async function periodSpend(
   currency: Currency,
   timezone: string,
   at: Date,
+  /** Leave one transaction out (e.g. the purchase being re-checked for approval). */
+  excludeTransactionId: string | null = null,
 ): Promise<Record<Period, PeriodSpend>> {
   const bounds = Object.fromEntries(
     PERIODS.map((p) => [p, periodBounds(at, p, timezone)]),
@@ -87,6 +89,7 @@ export async function periodSpend(
         JOIN "Transaction" t ON t."id" = l."transactionId"
        WHERE l."userId" = ${userId}::uuid
          AND l."currency" = ${currency}
+         AND (${excludeTransactionId}::uuid IS NULL OR t."id" <> ${excludeTransactionId}::uuid)
          AND t."createdAt" >= (${utc(earliest)}::timestamptz AT TIME ZONE 'UTC')
          AND t."createdAt" <  (${utc(latest)}::timestamptz AT TIME ZONE 'UTC')
        GROUP BY t."id", t."createdAt"
@@ -114,6 +117,7 @@ export async function periodSpend(
 export async function committedByTask(
   tx: Tx | Database,
   taskIds: string[],
+  excludeTransactionId: string | null = null,
 ): Promise<Map<string, number>> {
   if (taskIds.length === 0) return new Map();
   const rows = await tx.$queryRaw<{ taskId: string; committed: bigint }[]>`
@@ -122,6 +126,7 @@ export async function committedByTask(
       FROM "LedgerEntry" l
       JOIN "Transaction" t ON t."id" = l."transactionId"
      WHERE t."taskId" = ANY(${taskIds}::uuid[])
+       AND (${excludeTransactionId}::uuid IS NULL OR t."id" <> ${excludeTransactionId}::uuid)
      GROUP BY t."taskId"`;
   return new Map(rows.map((r) => [r.taskId, Number(r.committed)]));
 }
@@ -135,6 +140,7 @@ export async function loadSpendSnapshot(
     merchantId: string;
     amountMinor: number;
     at: Date;
+    excludeTransactionId?: string | null;
   },
 ): Promise<SpendSnapshot> {
   const timezone = input.policy?.timezone ?? 'UTC';
@@ -144,7 +150,14 @@ export async function loadSpendSnapshot(
   );
 
   const [periods, history, similar] = await Promise.all([
-    periodSpend(tx, input.userId, input.currency, timezone, input.at),
+    periodSpend(
+      tx,
+      input.userId,
+      input.currency,
+      timezone,
+      input.at,
+      input.excludeTransactionId ?? null,
+    ),
     tx.transaction.count({
       where: {
         userId: input.userId,
@@ -157,6 +170,7 @@ export async function loadSpendSnapshot(
       : tx.transaction.findMany({
           where: {
             userId: input.userId,
+            ...(input.excludeTransactionId ? { id: { not: input.excludeTransactionId } } : {}),
             merchantId: input.merchantId,
             amountMinor: input.amountMinor,
             currency: input.currency,

@@ -133,6 +133,9 @@ export async function getTransaction(
     })),
     approval: t.approval
       ? {
+          id: t.approval.id,
+          note: t.approval.note,
+          snapshotHash: t.approval.snapshotHash,
           status: t.approval.status,
           requestedAt: t.approval.requestedAt.toISOString(),
           expiresAt: t.approval.expiresAt.toISOString(),
