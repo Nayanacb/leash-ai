@@ -35,6 +35,13 @@ const AGENT_REASON: Record<string, AgentReasonCode> = {
   CANCELLED: 'CANCELLED',
   HUMAN_APPROVED: 'APPROVED',
   HUMAN_REJECTED: 'REJECTED',
+  // Payment failures: the agent learns only that payment failed, never why.
+  PAYMENT_DECLINED: 'PAYMENT_FAILED',
+  ORDER_MISMATCH: 'PAYMENT_FAILED',
+  PAYEE_CHANGED: 'PAYMENT_FAILED',
+  POLICY_BLOCKED_AT_CAPTURE: 'PAYMENT_FAILED',
+  ORDER_VOIDED: 'PAYMENT_FAILED',
+  PAYMENT_CAPTURED: 'PAID',
 };
 
 export function agentReasonCodes(

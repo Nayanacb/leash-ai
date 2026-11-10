@@ -6,6 +6,7 @@ import { createApp } from '../../src/app.js';
 import { createDatabase, type Database } from '../../src/db.js';
 import type { RateLimitSettings } from '../../src/middleware/rateLimit.js';
 import type { PolicyCompiler } from '../../src/modules/policies/compiler.js';
+import type { PaymentProvider } from '../../src/modules/payments/provider.js';
 import type { PurchaseEvaluators } from '../../src/modules/evaluation/evaluators.js';
 import { captureLogger, testConfig } from '../helpers.js';
 import { testDatabaseUrl } from './testDatabase.js';
@@ -41,6 +42,7 @@ export function makeApp(
     rateLimits?: Partial<RateLimitSettings>;
     policyCompiler?: PolicyCompiler | null;
     purchaseEvaluators?: PurchaseEvaluators | null;
+    paymentProvider?: PaymentProvider | null;
     env?: Record<string, string>;
   } = {},
 ) {
@@ -54,6 +56,8 @@ export function makeApp(
     // Never call a real LLM from tests unless a test injects a compiler explicitly.
     policyCompiler: options.policyCompiler ?? null,
     purchaseEvaluators: options.purchaseEvaluators ?? null,
+    // Never call real PayPal from tests; inject FakePayPal explicitly.
+    paymentProvider: options.paymentProvider ?? null,
   });
   return { app, logs: lines };
 }

@@ -16,7 +16,8 @@ The full design lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 | 4     | Policy compiler, deterministic engine, budget ledger, policy review UI        | Done     |
 | 5     | Purchase requests, injection + intent checks, decision combiner, transactions | Done     |
 | 6     | Human approval: queue, approve/reject with step-up + snapshot hash, expiry    | Done     |
-| 7+    | PayPal checkout, webhooks, refunds                                            | Upcoming |
+| 7     | PayPal sandbox checkout: order, buyer approval, verify-then-capture           | Done     |
+| 8+    | Webhooks, refunds                                                             | Upcoming |
 
 ## Repository layout
 
@@ -75,7 +76,7 @@ curl -s http://localhost:4000/api/agent/v1/purchase-requests \
        "sourceContext":[{"kind":"web_page","url":"https://shop.example/cable","content":"…"}]}'
 ```
 
-The response is `{ id, status, decision: ALLOW|ESCALATE|BLOCK, reasonCodes, approvalExpiresAt, authorizationExpiresAt }`. Retrying with the same `Idempotency-Key` returns the same purchase. `GET /purchase-requests/:id` polls; `POST /purchase-requests/:id/cancel` withdraws a pending or authorized purchase. No money moves yet (PayPal arrives in Phase 7).
+The response is `{ id, status, decision: ALLOW|ESCALATE|BLOCK, reasonCodes, approvalExpiresAt, authorizationExpiresAt }`. Retrying with the same `Idempotency-Key` returns the same purchase. `GET /purchase-requests/:id` polls; `POST /purchase-requests/:id/cancel` withdraws a purchase that hasn’t started capturing. Statuses after authorization: `ORDER_CREATED` → `CAPTURING` → `CAPTURED` (reason `PAID`), or `PAYMENT_FAILED` / `EXPIRED`. Agents never receive PayPal links, order IDs or credentials.
 
 ### Human approval (ESCALATE)
 
@@ -88,6 +89,25 @@ An ESCALATE decision creates an approval and keeps the funds held. It appears on
 
 Dashboard endpoints: `GET /api/v1/approvals?status=PENDING|APPROVED|REJECTED|EXPIRED|CANCELLED`, `POST /api/v1/approvals/:id/approve` (`{ snapshotHash, note? }`; needs a recent `POST /api/v1/auth/step-up`), `POST /api/v1/approvals/:id/reject` (`{ note? }`).
 
+### Payments (PayPal sandbox)
+
+An authorized purchase (ALLOW, or ESCALATE + your approval) shows **Pay with PayPal (sandbox)** on its detail page. Leash creates the PayPal order from the stored purchase (amount, currency, the payee fixed when Leash decided, transaction ID), and sends **you** — never the agent — to PayPal's sandbox to approve it with a sandbox buyer account. PayPal returns you to `/transactions/:id/paypal-return`; that page asks the server to finish, and the server:
+
+1. ignores everything in the redirect and fetches the stored order from PayPal itself;
+2. requires it to be `APPROVED` and to match exactly: amount, currency, payee, `custom_id`/`invoice_id` (the transaction ID);
+3. checks the authorization deadline (`AUTHORIZATION_TTL_MINUTES`, default 30, covers the whole checkout), that the merchant's PayPal account is unchanged, and re-runs your current policy, task and budget;
+4. captures once (stable `PayPal-Request-Id`) and verifies the capture.
+
+A mismatch, a changed payee, or a policy that now blocks → `PAYMENT_FAILED`, nothing captured, funds released once. A pending capture or a lost response stays `CAPTURING`; the background sweep reads PayPal's state first and only then re-sends the capture with the same request ID. Leaving PayPal without paying keeps the order; you can continue until the deadline.
+
+Setup (sandbox only): create a sandbox REST app at developer.paypal.com and set `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` in `apps/server/.env`; register merchants with sandbox **Business** account emails; pay with a sandbox **Personal** account. Check the credentials (creates one 1.00 USD order, never captures it, never prints secrets):
+
+```bash
+npm run paypal:smoke -w @leash/server -- --payee <sandbox business email>
+```
+
+Dashboard endpoints: `POST /api/v1/transactions/:id/checkout` → `{ status: "REDIRECT", approveUrl }` or `{ status: "APPROVED" }`; `POST /api/v1/transactions/:id/checkout/complete` → the transaction.
+
 ## Configuration
 
 All server configuration is validated at startup (`apps/server/src/config/env.ts`). See [`apps/server/.env.example`](apps/server/.env.example) for every variable. Highlights:
@@ -95,7 +115,7 @@ All server configuration is validated at startup (`apps/server/src/config/env.ts
 - `PAYPAL_ENV` must be `sandbox`; any `PAYPAL_*` variable referencing a live PayPal host is rejected.
 - `SANDBOX_MAX_TRANSACTION_MINOR` defaults to `50000` ($500) and cannot be raised above it.
 - Anthropic model IDs are configuration, never code. See below.
-- PayPal sandbox credentials are not needed until Phase 7. They live only in the server's environment.
+- PayPal sandbox credentials (`PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`) live only in the server's environment. See **Payments** below.
 
 ### Anthropic (policy compilation)
 

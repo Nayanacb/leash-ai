@@ -72,6 +72,15 @@ const DETAIL = {
   authorizationExpiresAt: null,
   ledger: [{ type: 'RESERVE', amountMinor: 1899, createdAt: '2026-11-09T10:00:00.000Z' }],
   heldMinor: 1899,
+  payment: {
+    payee: 'pay@cable.example',
+    paypalOrderId: null,
+    orderCreatedAt: null,
+    paypalCaptureId: null,
+    capturedMinor: null,
+    capturedAt: null,
+    failureReason: null,
+  },
   audit: [],
   updatedAt: '2026-11-09T10:00:01.000Z',
 };

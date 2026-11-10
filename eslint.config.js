@@ -52,6 +52,8 @@ export default tseslint.config(
     files: [
       'apps/server/src/modules/authorization/**/*.ts',
       'apps/server/src/modules/budget/**/*.ts',
+      // Payments are authorized by the deterministic engine only.
+      'apps/server/src/modules/payments/**/*.ts',
     ],
     rules: {
       'no-restricted-imports': [

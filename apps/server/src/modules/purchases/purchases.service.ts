@@ -47,6 +47,9 @@ function stripNul<T>(value: T): T {
   return value;
 }
 
+/** Authorized by Leash and not yet captured: the authorization deadline still applies. */
+const AWAITING_PAYMENT: TransactionStatus[] = ['AUTHORIZED', 'ORDER_CREATED', 'BUYER_APPROVED'];
+
 export function toAgentResponse(tx: TxWithApproval): PurchaseRequestResponse {
   return {
     id: tx.id,
@@ -59,8 +62,9 @@ export function toAgentResponse(tx: TxWithApproval): PurchaseRequestResponse {
     },
     approvalExpiresAt:
       tx.status === 'PENDING_APPROVAL' ? (tx.approval?.expiresAt.toISOString() ?? null) : null,
-    authorizationExpiresAt:
-      tx.status === 'AUTHORIZED' ? (tx.authorizationExpiresAt?.toISOString() ?? null) : null,
+    authorizationExpiresAt: AWAITING_PAYMENT.includes(tx.status)
+      ? (tx.authorizationExpiresAt?.toISOString() ?? null)
+      : null,
     createdAt: tx.createdAt.toISOString(),
   };
 }
@@ -243,6 +247,8 @@ async function finalizeEvaluation(
         decision,
         reasonCodes,
         snapshotHash,
+        // The payee is fixed now; checkout pays exactly this account (Phase 7).
+        payeeEmail: decision === 'BLOCK' ? null : input.snapshot.payee,
         ...(decision === 'ALLOW' ? { authorizedAt: now, authorizationExpiresAt } : {}),
         version: { increment: 1 },
       },
@@ -312,7 +318,14 @@ async function finalizeEvaluation(
   });
 }
 
-const CANCELLABLE: TransactionStatus[] = ['EVALUATING', 'PENDING_APPROVAL', 'AUTHORIZED'];
+/** Never once capture has started: from CAPTURING on, money may have moved. */
+const CANCELLABLE: TransactionStatus[] = [
+  'EVALUATING',
+  'PENDING_APPROVAL',
+  'AUTHORIZED',
+  'ORDER_CREATED',
+  'BUYER_APPROVED',
+];
 
 /**
  * Cancels a purchase that hasn't been paid and releases its funds. Idempotent:

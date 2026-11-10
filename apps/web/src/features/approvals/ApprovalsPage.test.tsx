@@ -50,6 +50,15 @@ const DETAIL = {
   authorizationExpiresAt: '2026-11-09T10:35:00.000Z',
   ledger: [],
   heldMinor: 1899,
+  payment: {
+    payee: 'pay@cable.example',
+    paypalOrderId: null,
+    orderCreatedAt: null,
+    paypalCaptureId: null,
+    capturedMinor: null,
+    capturedAt: null,
+    failureReason: null,
+  },
   audit: [],
   updatedAt: '2026-11-09T10:05:00.000Z',
 };

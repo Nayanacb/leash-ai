@@ -102,6 +102,20 @@ function describe(event: AuditEventDto): string {
       return 'Purchase approved by you; payment authorized';
     case 'purchase.rejected':
       return 'Purchase rejected by you; funds released';
+    case 'purchase.order_created':
+      return 'PayPal sandbox order created; waiting for buyer approval';
+    case 'purchase.capture_started':
+      return 'Buyer approval and order verified with PayPal; capturing';
+    case 'purchase.captured':
+      return 'Payment captured (PayPal sandbox)';
+    case 'purchase.capture_pending':
+      return 'PayPal is still processing the capture';
+    case 'purchase.capture_uncertain':
+      return 'Capture outcome unknown; will be checked with PayPal';
+    case 'purchase.payment_failed':
+      return `Payment failed (${str('reason').toLowerCase().replaceAll('_', ' ')}); funds released`;
+    case 'purchase.payment_anomaly':
+      return 'PayPal reported something that does not match this purchase';
     case 'purchase.authorization_expired':
       return 'Authorized purchase was not paid in time; funds released';
     default:
@@ -117,6 +131,9 @@ const WARNING_ACTIONS = new Set([
   'policy.compile_rejected',
   'purchase.evaluation_expired',
   'purchase.approval_expired',
+  'purchase.payment_failed',
+  'purchase.payment_anomaly',
+  'purchase.capture_uncertain',
 ]);
 
 export function AuditPage() {

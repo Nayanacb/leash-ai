@@ -88,13 +88,13 @@ export async function listApprovals(
 }
 
 /**
- * Deterministic re-check at approval time. The human approves *escalation*
+ * Deterministic re-check at approval and capture time. The human approves *escalation*
  * reasons only: if the current policy, task or budget would now BLOCK the
  * purchase, approval is refused. The purchase's own reservation is left out
  * of the spend it is compared against, and spend is attributed to the period
  * the purchase was reserved in (as everywhere else).
  */
-async function recheckForApproval(
+export async function recheckDeterministicPolicy(
   tx: Prisma.TransactionClient,
   transaction: {
     id: string;
@@ -238,7 +238,7 @@ export async function approvePurchase(
       );
     }
 
-    const recheck = await recheckForApproval(tx, t, now, config);
+    const recheck = await recheckDeterministicPolicy(tx, t, now, config);
     if (recheck.decision === 'BLOCK') {
       throw new AppError(
         409,

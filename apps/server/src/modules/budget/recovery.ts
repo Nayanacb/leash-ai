@@ -1,5 +1,5 @@
 import type { Database } from '../../db.js';
-import type { TransactionStatus } from '../../generated/prisma/client.js';
+import type { Prisma, TransactionStatus } from '../../generated/prisma/client.js';
 import type { Logger } from '../../lib/logger.js';
 import { appendAuditEvent } from '../audit/auditLog.js';
 import { lockUserBudget, releaseWithinTransaction } from './ledger.js';
@@ -162,9 +162,65 @@ export async function expireOverdueApprovals(
   return { expired, failed };
 }
 
+/** Authorized by Leash but not paid yet: the authorization deadline applies to the whole checkout. */
+export const AWAITING_PAYMENT_STATUSES: TransactionStatus[] = [
+  'AUTHORIZED',
+  'ORDER_CREATED',
+  'BUYER_APPROVED',
+];
+
 /**
- * Expires AUTHORIZED purchases that were not paid within the authorization
- * window, and releases their funds.
+ * Expires one purchase whose authorization deadline has passed and releases
+ * its funds. The caller holds the user's budget lock. Compare-and-swap: a
+ * no-op (false) unless the purchase is still in one of `fromStatuses` and
+ * overdue. Never pass a status in which money may already have moved, unless
+ * the provider has confirmed that it did not.
+ */
+export async function expireAuthorizationWithin(
+  tx: Prisma.TransactionClient,
+  purchase: { id: string; userId: string },
+  now: Date,
+  fromStatuses: TransactionStatus[] = AWAITING_PAYMENT_STATUSES,
+): Promise<boolean> {
+  const current = await tx.transaction.findUniqueOrThrow({
+    where: { id: purchase.id },
+    select: { status: true },
+  });
+  const { count } = await tx.transaction.updateMany({
+    where: {
+      id: purchase.id,
+      status: { in: fromStatuses },
+      authorizationExpiresAt: { lte: now },
+    },
+    data: {
+      status: 'EXPIRED',
+      reasonCodes: { push: 'AUTHORIZATION_EXPIRED' },
+      version: { increment: 1 },
+    },
+  });
+  if (count === 0) return false;
+  const { releasedMinor } = await releaseWithinTransaction(tx, {
+    userId: purchase.userId,
+    transactionId: purchase.id,
+    reason: 'authorization_expired',
+    actor: { type: 'SYSTEM', id: null },
+  });
+  await appendAuditEvent(tx, {
+    actorType: 'SYSTEM',
+    actorId: null,
+    userId: purchase.userId,
+    transactionId: purchase.id,
+    action: 'purchase.authorization_expired',
+    data: { releasedMinor, fromStatus: current.status },
+  });
+  return true;
+}
+
+/**
+ * Expires authorized purchases that were not paid within the authorization
+ * window (including those whose PayPal checkout was started but never
+ * captured), and releases their funds. Purchases in CAPTURING are left to
+ * payment reconciliation: money may already have moved.
  */
 export async function expireOverdueAuthorizations(
   db: Database,
@@ -172,7 +228,7 @@ export async function expireOverdueAuthorizations(
 ): Promise<{ expired: string[]; failed: string[] }> {
   const now = options.now ?? new Date();
   const candidates = await db.transaction.findMany({
-    where: { status: 'AUTHORIZED', authorizationExpiresAt: { lte: now } },
+    where: { status: { in: AWAITING_PAYMENT_STATUSES }, authorizationExpiresAt: { lte: now } },
     select: { id: true, userId: true },
     orderBy: { authorizationExpiresAt: 'asc' },
     take: options.batchSize ?? 100,
@@ -183,30 +239,7 @@ export async function expireOverdueAuthorizations(
     try {
       const done = await db.$transaction(async (tx) => {
         await lockUserBudget(tx, c.userId);
-        const { count } = await tx.transaction.updateMany({
-          where: { id: c.id, status: 'AUTHORIZED', authorizationExpiresAt: { lte: now } },
-          data: {
-            status: 'EXPIRED',
-            reasonCodes: { push: 'AUTHORIZATION_EXPIRED' },
-            version: { increment: 1 },
-          },
-        });
-        if (count === 0) return false;
-        const { releasedMinor } = await releaseWithinTransaction(tx, {
-          userId: c.userId,
-          transactionId: c.id,
-          reason: 'authorization_expired',
-          actor: { type: 'SYSTEM', id: null },
-        });
-        await appendAuditEvent(tx, {
-          actorType: 'SYSTEM',
-          actorId: null,
-          userId: c.userId,
-          transactionId: c.id,
-          action: 'purchase.authorization_expired',
-          data: { releasedMinor },
-        });
-        return true;
+        return expireAuthorizationWithin(tx, c, now);
       });
       if (done) expired.push(c.id);
     } catch (err) {

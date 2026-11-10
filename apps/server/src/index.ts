@@ -5,6 +5,7 @@ import { ConfigError, parseConfig, type AppConfig } from './config/env.js';
 import { createDatabase } from './db.js';
 import { startBackgroundJobs } from './jobs/scheduler.js';
 import { createLogger } from './lib/logger.js';
+import { paymentProviderFromConfig } from './modules/payments/paypal/checkout.js';
 
 function loadConfigOrExit(): AppConfig {
   try {
@@ -24,7 +25,9 @@ async function main() {
   const logger = createLogger({ level: config.logLevel, pretty: config.nodeEnv === 'development' });
   const db = createDatabase(config.databaseUrl);
 
-  const app = createApp({ config, logger, db, version: pkg.version });
+  // One provider instance, so the app and the reconciliation sweep share PayPal's OAuth token.
+  const paymentProvider = paymentProviderFromConfig(config);
+  const app = createApp({ config, logger, db, version: pkg.version, paymentProvider });
   const server = app.listen(config.port, config.host, () => {
     logger.info(
       {
@@ -36,7 +39,7 @@ async function main() {
     );
   });
 
-  const jobs = startBackgroundJobs({ db, config, logger });
+  const jobs = startBackgroundJobs({ db, config, logger, paymentProvider });
 
   let shuttingDown = false;
   const shutdown = (signal: string) => {

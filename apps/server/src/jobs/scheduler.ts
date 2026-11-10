@@ -2,6 +2,8 @@ import type { AppConfig } from '../config/env.js';
 import type { Database } from '../db.js';
 import type { Logger } from '../lib/logger.js';
 import { sweepReservations } from '../modules/budget/recovery.js';
+import { reconcileCapturingPayments } from '../modules/payments/checkout.service.js';
+import type { PaymentProvider } from '../modules/payments/provider.js';
 
 export interface BackgroundJobs {
   /** Runs one sweep now (also used at startup). Never overlaps a running sweep. */
@@ -20,8 +22,10 @@ export function startBackgroundJobs(deps: {
   db: Database;
   config: AppConfig;
   logger: Logger;
+  paymentProvider?: PaymentProvider | null;
 }): BackgroundJobs {
   const { db, config, logger } = deps;
+  const provider = deps.paymentProvider ?? null;
   let inFlight: Promise<void> | null = null;
 
   const runNow = () => {
@@ -44,6 +48,18 @@ export function startBackgroundJobs(deps: {
         }
       } catch (err) {
         logger.error({ err }, 'reservation sweep failed');
+      }
+      try {
+        // Purchases left in CAPTURING (pending or unknown outcome) — PayPal is read first.
+        const payments = await reconcileCapturingPayments({ db, config, provider, logger });
+        if (payments.settled.length || payments.failed.length) {
+          logger.info(
+            { settled: payments.settled.length, failed: payments.failed.length },
+            'payment reconciliation',
+          );
+        }
+      } catch (err) {
+        logger.error({ err }, 'payment reconciliation failed');
       } finally {
         inFlight = null;
       }

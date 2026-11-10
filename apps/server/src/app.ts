@@ -26,6 +26,9 @@ import { policyCompilerFromConfig, purchaseEvaluatorsFromConfig } from './llm/in
 import type { PurchaseEvaluators } from './modules/evaluation/evaluators.js';
 import { transactionsRouter } from './modules/purchases/transactions.routes.js';
 import { approvalsRouter } from './modules/approvals/approvals.routes.js';
+import { paymentProviderFromConfig } from './modules/payments/paypal/checkout.js';
+import type { PaymentProvider } from './modules/payments/provider.js';
+import { paymentsRouter } from './modules/payments/payments.routes.js';
 import { PURCHASE_REQUEST_MAX_BODY_BYTES } from '@leash/shared';
 import { healthRouter } from './routes/health.js';
 
@@ -41,6 +44,8 @@ export interface AppDeps {
   policyCompiler?: PolicyCompiler | null;
   /** Override the AI purchase evaluators (tests). Defaults to the configured Anthropic evaluators, or null. */
   purchaseEvaluators?: PurchaseEvaluators | null;
+  /** Override the payment provider (tests). Defaults to PayPal sandbox from config, or null. */
+  paymentProvider?: PaymentProvider | null;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -53,7 +58,17 @@ export function createApp(deps: AppDeps): Express {
     deps.purchaseEvaluators !== undefined
       ? deps.purchaseEvaluators
       : purchaseEvaluatorsFromConfig(config);
-  const ctx: AppContext = { config, db, logger, limiters, policyCompiler, purchaseEvaluators };
+  const paymentProvider =
+    deps.paymentProvider !== undefined ? deps.paymentProvider : paymentProviderFromConfig(config);
+  const ctx: AppContext = {
+    config,
+    db,
+    logger,
+    limiters,
+    policyCompiler,
+    purchaseEvaluators,
+    paymentProvider,
+  };
   const probe = deps.probe ?? databaseProbe(db);
 
   app.disable('x-powered-by');
@@ -116,6 +131,7 @@ export function createApp(deps: AppDeps): Express {
     policiesRouter(ctx),
     transactionsRouter(ctx),
     approvalsRouter(ctx),
+    paymentsRouter(ctx),
     auditRouter(ctx),
   );
   app.use('/api/v1', userApi);

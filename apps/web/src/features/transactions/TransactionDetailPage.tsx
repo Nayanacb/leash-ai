@@ -5,12 +5,20 @@ import { z } from 'zod';
 import { useCancelTransaction, useTransaction } from '../../api/transactions';
 import { Button } from '../../components/ui/Button';
 import { ApprovalActions } from '../approvals/ApprovalActions';
+import { PaymentPanel } from '../payments/PaymentPanel';
 import { ErrorMessage, Loading } from '../../components/ui/Feedback';
 import { PageHeader, Panel, Table, Td, Th } from '../../components/ui/Layout';
 import { DecisionPill, LifecycleStatus, StatusPill } from '../../components/ui/StatusPill';
 import { formatDateTime, formatMoney, humanize } from '../../lib/format';
 
-const CANCELLABLE = new Set(['EVALUATING', 'PENDING_APPROVAL', 'AUTHORIZED']);
+const CANCELLABLE = new Set([
+  'EVALUATING',
+  'PENDING_APPROVAL',
+  'AUTHORIZED',
+  'ORDER_CREATED',
+  'BUYER_APPROVED',
+]);
+const AWAITING_PAYMENT = new Set(['AUTHORIZED', 'ORDER_CREATED', 'BUYER_APPROVED']);
 
 // Evaluation details are free-form JSON: parse defensively for display.
 const PolicyDetails = z
@@ -147,6 +155,8 @@ function TransactionDetail({ t }: { t: TransactionDetailDto }) {
         </div>
       )}
 
+      <PaymentPanel t={t} />
+
       {CANCELLABLE.has(t.status) && (
         <div className="flex items-center gap-3">
           <Button
@@ -183,11 +193,13 @@ function TransactionDetail({ t }: { t: TransactionDetailDto }) {
               '—'
             )}
           </Row>
-          <Row label="Funds held now">{formatMoney(t.heldMinor, t.currency)}</Row>
+          <Row label={t.status === 'CAPTURED' ? 'Spent (captured)' : 'Funds held now'}>
+            {formatMoney(t.heldMinor, t.currency)}
+          </Row>
           <Row label="Policy version">
             {t.policyVersion ? `v${t.policyVersion}` : 'none active'}
           </Row>
-          {t.authorizationExpiresAt && t.status === 'AUTHORIZED' && (
+          {t.authorizationExpiresAt && AWAITING_PAYMENT.has(t.status) && (
             <Row label="Authorization expires">{formatDateTime(t.authorizationExpiresAt)}</Row>
           )}
           <Row label="Reasons (internal)">

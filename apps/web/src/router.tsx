@@ -7,6 +7,7 @@ import { AuditPage } from './features/audit/AuditPage';
 import { LoginPage, PublicOnly, RegisterPage, RequireAuth } from './features/auth/AuthPages';
 import { OverviewPage } from './features/dashboard/OverviewPage';
 import { MerchantsPage } from './features/merchants/MerchantsPage';
+import { PayPalReturnPage } from './features/payments/PayPalReturnPage';
 import { PoliciesPage } from './features/policies/PoliciesPage';
 import { PolicyReviewPage } from './features/policies/PolicyReviewPage';
 import { NotFoundPage } from './features/placeholder/ComingSoonPage';
@@ -33,6 +34,7 @@ export const router = createBrowserRouter([
           { path: 'approvals', element: <ApprovalsPage /> },
           { path: 'transactions', element: <TransactionsPage /> },
           { path: 'transactions/:id', element: <TransactionDetailPage /> },
+          { path: 'transactions/:id/paypal-return', element: <PayPalReturnPage /> },
           { path: 'policies', element: <PoliciesPage /> },
           { path: 'policies/versions/:id', element: <PolicyReviewPage /> },
           { path: 'tasks', element: <TasksPage /> },

@@ -98,6 +98,8 @@ export const AgentReasonCodeSchema = z.enum([
   'CANCELLED',
   'APPROVED',
   'REJECTED',
+  'PAID',
+  'PAYMENT_FAILED',
 ]);
 export type AgentReasonCode = z.infer<typeof AgentReasonCodeSchema>;
 
@@ -199,6 +201,16 @@ export const TransactionDetailDtoSchema = TransactionSummaryDtoSchema.extend({
     z.object({ type: z.string(), amountMinor: z.number().int(), createdAt: z.string() }),
   ),
   heldMinor: z.number().int(),
+  /** PayPal checkout state. Never includes the buyer-approval link or credentials. */
+  payment: z.object({
+    payee: z.string().nullable(),
+    paypalOrderId: z.string().nullable(),
+    orderCreatedAt: z.string().nullable(),
+    paypalCaptureId: z.string().nullable(),
+    capturedMinor: z.number().int().nullable(),
+    capturedAt: z.string().nullable(),
+    failureReason: z.string().nullable(),
+  }),
   audit: z.array(
     z.object({
       action: z.string(),
@@ -252,3 +264,15 @@ export const ApproveInputSchema = z.object({
 });
 
 export const RejectInputSchema = z.object({ note: ApprovalNoteSchema });
+
+// ── Payments (user API) ────────────────────────────────────────────────────
+
+/**
+ * Starting checkout either sends the user to PayPal to approve the order, or
+ * (if they already approved it) straight to completing it.
+ */
+export const CheckoutStartResponseSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('REDIRECT'), approveUrl: z.url() }),
+  z.object({ status: z.literal('APPROVED') }),
+]);
+export type CheckoutStartResponse = z.infer<typeof CheckoutStartResponseSchema>;

@@ -290,10 +290,17 @@ model Transaction {
   authorizedAt           DateTime?
   authorizationExpiresAt DateTime?
 
-  paypalOrderId   String? @unique
-  paypalCaptureId String? @unique
-  capturedMinor   Int?
-  refundedMinor   Int     @default(0)
+  /// PayPal account to be paid, fixed when Leash decided (from the merchant registry).
+  /// Orders are built from this stored value, never from the merchant's current record.
+  payeeEmail           String?
+  paypalOrderId        String?   @unique
+  orderCreatedAt       DateTime?
+  paypalCaptureId      String?   @unique
+  capturedMinor        Int?
+  capturedAt           DateTime?
+  /// Why the payment failed (internal code), when status is PAYMENT_FAILED.
+  paymentFailureReason String?
+  refundedMinor        Int       @default(0)
 
   /// Optimistic-lock counter, incremented on every state transition.
   version   Int      @default(0)

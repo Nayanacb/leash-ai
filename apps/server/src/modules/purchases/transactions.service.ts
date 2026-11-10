@@ -150,6 +150,15 @@ export async function getTransaction(
       createdAt: l.createdAt.toISOString(),
     })),
     heldMinor: Math.max(0, held),
+    payment: {
+      payee: t.payeeEmail,
+      paypalOrderId: t.paypalOrderId,
+      orderCreatedAt: t.orderCreatedAt?.toISOString() ?? null,
+      paypalCaptureId: t.paypalCaptureId,
+      capturedMinor: t.capturedMinor,
+      capturedAt: t.capturedAt?.toISOString() ?? null,
+      failureReason: t.paymentFailureReason,
+    },
     audit: audit.map((a) => ({
       action: a.action,
       actorType: a.actorType,
