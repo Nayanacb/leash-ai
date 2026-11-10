@@ -1,0 +1,460 @@
+// Leash database schema. See docs/ARCHITECTURE.md §4.
+//
+// Conventions:
+//   * UUIDv7 primary keys (time-ordered).
+//   * Money is integer minor units (`...Minor`) + ISO-4217 currency. Never floats.
+//   * Every user-owned row carries `userId`; every query must be scoped by it.
+//   * Enums mirror packages/shared/src/enums.ts (a test keeps them in sync).
+//   * Extra guarantees Prisma cannot express (CHECK constraints, partial unique
+//     index, append-only and immutability triggers) live in the migration SQL.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum Decision {
+  ALLOW
+  ESCALATE
+  BLOCK
+}
+
+enum TransactionStatus {
+  EVALUATING
+  BLOCKED
+  PENDING_APPROVAL
+  REJECTED
+  EXPIRED
+  AUTHORIZED
+  ORDER_CREATED
+  BUYER_APPROVED
+  CAPTURING
+  CAPTURED
+  PAYMENT_FAILED
+  PARTIALLY_REFUNDED
+  REFUNDED
+  REVERSED
+  CANCELLED
+}
+
+enum EvaluationLayer {
+  POLICY
+  INJECTION
+  INTENT
+}
+
+enum Verdict {
+  PASS
+  ESCALATE
+  BLOCK
+  ERROR
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+enum PolicyVersionStatus {
+  DRAFT
+  ACTIVE
+  SUPERSEDED
+  REJECTED
+}
+
+enum LedgerEntryType {
+  RESERVE
+  RELEASE
+  REFUND
+}
+
+enum ActorType {
+  USER
+  AGENT
+  SYSTEM
+  PAYPAL
+  LLM
+}
+
+enum AgentStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum TaskStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+enum RefundStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+// ───────────────────────────── Identity ─────────────────────────────
+
+model User {
+  id           String   @id @default(uuid(7)) @db.Uuid
+  /// Stored lower-cased by the application.
+  email        String   @unique
+  /// argon2id hash.
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions         Session[]
+  agents           Agent[]
+  merchants        Merchant[]
+  policyVersions   PolicyVersion[]
+  tasks            Task[]
+  transactions     Transaction[]
+  ledgerEntries    LedgerEntry[]
+  approvalsDecided Approval[]      @relation("ApprovalDecidedBy")
+  refundsRequested Refund[]
+}
+
+model Session {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  userId     String    @db.Uuid
+  /// SHA-256 of the opaque session token; the token itself is never stored.
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  /// Last successful step-up re-authentication (required for approvals and policy confirmation).
+  stepUpAt   DateTime?
+  lastSeenAt DateTime  @default(now())
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Agent {
+  id        String      @id @default(uuid(7)) @db.Uuid
+  userId    String      @db.Uuid
+  name      String
+  status    AgentStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  apiKeys      AgentApiKey[]
+  tasks        Task[]
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model AgentApiKey {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  agentId    String    @db.Uuid
+  /// Optional human label, e.g. "staging worker".
+  label      String?
+  /// Non-secret prefix shown in the UI to identify the key (e.g. "lsh_3f9a").
+  prefix     String
+  /// SHA-256 of the full key; the key itself is shown once and never stored.
+  keyHash    String    @unique
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+
+  agent Agent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+// ───────────────────────────── Configuration ─────────────────────────────
+
+model Merchant {
+  id               String    @id @default(uuid(7)) @db.Uuid
+  userId           String    @db.Uuid
+  displayName      String
+  /// PayPal sandbox business account that receives payment. Resolved server-side; never supplied by agents.
+  paypalEmail      String
+  paypalMerchantId String?
+  domain           String?
+  category         String
+  /// Archived merchants stay referenceable by history but cannot be used in new tasks or payments.
+  archivedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  @@unique([userId, paypalEmail])
+  @@index([userId])
+}
+
+model PolicyVersion {
+  id              String              @id @default(uuid(7)) @db.Uuid
+  userId          String              @db.Uuid
+  version         Int
+  /// The user's natural-language rules.
+  sourceText      String
+  /// Policy DSL produced by the compiler and validated with Zod.
+  compiledRules   Json
+  /// SHA-256 of the canonical compiledRules JSON.
+  rulesHash       String
+  status          PolicyVersionStatus @default(DRAFT)
+  compilerModel   String
+  promptVersion   String
+  /// Clauses the compiler could not express in the DSL; must be acknowledged before confirming.
+  unmappedClauses Json                @default("[]")
+  /// Interpretation choices the compiler made (e.g. "weekly" read as Monday–Sunday).
+  assumptions     Json                @default("[]")
+  /// True if the user edited the compiled JSON by hand before confirming.
+  editedManually  Boolean             @default(false)
+  confirmedAt     DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  // Migration adds: partial unique index (one ACTIVE per user) and an immutability trigger.
+  @@unique([userId, version])
+}
+
+model Task {
+  id                 String     @id @default(uuid(7)) @db.Uuid
+  userId             String     @db.Uuid
+  agentId            String     @db.Uuid
+  /// The user's original instruction. Created only by the user, never by an agent.
+  instruction        String
+  budgetMinor        Int
+  currency           String     @db.Char(3)
+  allowedMerchantIds String[]   @db.Uuid
+  status             TaskStatus @default(ACTIVE)
+  expiresAt          DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id])
+  agent        Agent         @relation(fields: [agentId], references: [id])
+  transactions Transaction[]
+
+  @@index([userId, status])
+  @@index([agentId, status])
+}
+
+// ───────────────────────────── Transactions ─────────────────────────────
+
+model Transaction {
+  id              String  @id @default(uuid(7)) @db.Uuid
+  userId          String  @db.Uuid
+  agentId         String  @db.Uuid
+  taskId          String  @db.Uuid
+  merchantId      String? @db.Uuid
+  /// Policy version used for the decision. Null only when no policy was active (→ BLOCK).
+  policyVersionId String? @db.Uuid
+
+  idempotencyKey String
+  /// SHA-256 of the canonical request body, to detect idempotency-key reuse with a different payload.
+  requestHash    String
+
+  amountMinor     Int
+  currency        String  @db.Char(3)
+  itemDescription String
+  quantity        Int
+  category        String?
+
+  /// Untrusted, agent-written text.
+  agentJustification String?
+  /// Untrusted and possibly incomplete external content the agent says it consumed.
+  untrustedContext   Json?
+
+  status       TransactionStatus @default(EVALUATING)
+  decision     Decision?
+  reasonCodes  String[]          @default([])
+  /// Hash of what the approver was shown (approve-what-you-saw).
+  snapshotHash String?
+
+  authorizedAt           DateTime?
+  authorizationExpiresAt DateTime?
+
+  /// PayPal account to be paid, fixed when Leash decided (from the merchant registry).
+  /// Orders are built from this stored value, never from the merchant's current record.
+  payeeEmail           String?
+  paypalOrderId        String?   @unique
+  orderCreatedAt       DateTime?
+  paypalCaptureId      String?   @unique
+  capturedMinor        Int?
+  capturedAt           DateTime?
+  /// Why the payment failed (internal code), when status is PAYMENT_FAILED.
+  paymentFailureReason String?
+  refundedMinor        Int       @default(0)
+
+  /// Optimistic-lock counter, incremented on every state transition.
+  version   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id])
+  agent         Agent          @relation(fields: [agentId], references: [id])
+  task          Task           @relation(fields: [taskId], references: [id])
+  merchant      Merchant?      @relation(fields: [merchantId], references: [id])
+  policyVersion PolicyVersion? @relation(fields: [policyVersionId], references: [id])
+  evaluations   Evaluation[]
+  approval      Approval?
+  ledgerEntries LedgerEntry[]
+  refunds       Refund[]
+  webhookEvents WebhookEvent[]
+
+  @@unique([agentId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([userId, status])
+  @@index([status, authorizationExpiresAt])
+  @@index([status, createdAt])
+}
+
+model Evaluation {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  transactionId String          @db.Uuid
+  layer         EvaluationLayer
+  verdict       Verdict
+  confidence    Float?
+  details       Json            @default("{}")
+  /// Model ID actually used (AI layers only).
+  model         String?
+  promptVersion String?
+  latencyMs     Int?
+  error         String?
+  createdAt     DateTime        @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
+  @@index([transactionId])
+}
+
+/// Leash human approval — a separate checkpoint from PayPal buyer approval.
+model Approval {
+  id              String         @id @default(uuid(7)) @db.Uuid
+  transactionId   String         @unique @db.Uuid
+  status          ApprovalStatus @default(PENDING)
+  snapshotHash    String
+  requestedAt     DateTime       @default(now())
+  expiresAt       DateTime
+  decidedAt       DateTime?
+  decidedByUserId String?        @db.Uuid
+  note            String?
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  decidedBy   User?       @relation("ApprovalDecidedBy", fields: [decidedByUserId], references: [id])
+
+  @@index([status, expiresAt])
+}
+
+/// Append-only (enforced by trigger). Committed spend = Σ RESERVE − Σ RELEASE − Σ REFUND.
+model LedgerEntry {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  userId        String          @db.Uuid
+  transactionId String          @db.Uuid
+  type          LedgerEntryType
+  amountMinor   Int
+  currency      String          @db.Char(3)
+  /// Set on REFUND entries: at most one budget credit per refund.
+  refundId      String?         @unique @db.Uuid
+  createdAt     DateTime        @default(now())
+
+  user        User        @relation(fields: [userId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  refund      Refund?     @relation(fields: [refundId], references: [id], onDelete: Restrict)
+
+  @@index([userId, currency, createdAt])
+  @@index([transactionId])
+}
+
+/// Where a refund was initiated: by the user in Leash, or outside Leash (PayPal
+/// dashboard, or a reversal/chargeback) and picked up by webhook or reconciliation.
+enum RefundSource {
+  LEASH
+  PAYPAL
+}
+
+model Refund {
+  id                String       @id @default(uuid(7)) @db.Uuid
+  transactionId     String       @db.Uuid
+  /// Scoped per user ("<userId>:<key>"), or "paypal:<refundId>" / "reversal:<captureId>".
+  idempotencyKey    String       @unique
+  paypalRefundId    String?      @unique
+  amountMinor       Int
+  currency          String       @db.Char(3)
+  status            RefundStatus @default(PENDING)
+  source            RefundSource @default(LEASH)
+  reason            String?
+  failureReason     String?
+  /// Null for refunds that did not start in Leash.
+  requestedByUserId String?      @db.Uuid
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  completedAt       DateTime?
+
+  transaction   Transaction   @relation(fields: [transactionId], references: [id])
+  requestedBy   User?         @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  ledgerEntries LedgerEntry[]
+
+  @@index([transactionId])
+  @@index([status, updatedAt])
+}
+
+model WebhookEvent {
+  id             String    @id @default(uuid(7)) @db.Uuid
+  /// PayPal's event ID; unique so replays are ignored.
+  paypalEventId  String    @unique
+  eventType      String
+  resourceId     String?
+  /// A minimal summary (IDs, status, amount) — never the payer's details.
+  payload        Json
+  /// Only signature-verified events are stored.
+  verified       Boolean
+  transmissionId String?
+  attempts       Int       @default(0)
+  transactionId  String?   @db.Uuid
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+  error          String?
+
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([transactionId])
+  @@index([eventType, receivedAt])
+  @@index([processedAt, receivedAt])
+}
+
+/// Append-only, hash-chained audit log. UPDATE/DELETE/TRUNCATE are rejected by triggers.
+/// Deliberately has no foreign keys, so nothing elsewhere can cascade into it.
+model AuditEvent {
+  /// Canonical chain order.
+  seq           BigInt    @id @default(autoincrement())
+  id            String    @unique @default(uuid(7)) @db.Uuid
+  userId        String?   @db.Uuid
+  transactionId String?   @db.Uuid
+  actorType     ActorType
+  actorId       String?
+  action        String
+  data          Json      @default("{}")
+  prevHash      String
+  hash          String    @unique
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, seq])
+  @@index([transactionId, seq])
+}
