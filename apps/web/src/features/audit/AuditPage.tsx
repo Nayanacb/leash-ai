@@ -116,11 +116,31 @@ function describe(event: AuditEventDto): string {
       return `Payment failed (${str('reason').toLowerCase().replaceAll('_', ' ')}); funds released`;
     case 'purchase.payment_anomaly':
       return 'PayPal reported something that does not match this purchase';
+    case 'purchase.refund_requested':
+      return 'Refund requested';
+    case 'purchase.refunded':
+      return refundLabel(d);
+    case 'purchase.refund_pending':
+      return 'PayPal is still processing a refund';
+    case 'purchase.refund_uncertain':
+      return 'Refund outcome unknown; will be checked with PayPal';
+    case 'purchase.refund_failed':
+      return `Refund failed (${str('reason').toLowerCase().replaceAll('_', ' ')})`;
+    case 'purchase.reversed':
+      return 'Payment reversed by PayPal (chargeback or dispute); budget credited';
+    case 'payment.webhook_unmatched':
+      return 'PayPal sent an event for something Leash does not know; ignored';
     case 'purchase.authorization_expired':
       return 'Authorized purchase was not paid in time; funds released';
     default:
       return event.action;
   }
+}
+
+function refundLabel(d: Record<string, unknown>): string {
+  return d.source === 'PAYPAL'
+    ? 'Refund made outside Leash (PayPal) recorded; budget credited'
+    : 'Refund completed; budget credited';
 }
 
 const WARNING_ACTIONS = new Set([
@@ -134,6 +154,9 @@ const WARNING_ACTIONS = new Set([
   'purchase.payment_failed',
   'purchase.payment_anomaly',
   'purchase.capture_uncertain',
+  'purchase.refund_failed',
+  'purchase.refund_uncertain',
+  'purchase.reversed',
 ]);
 
 export function AuditPage() {

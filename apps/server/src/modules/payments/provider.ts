@@ -16,6 +16,23 @@ export interface CaptureView {
   currency: string;
 }
 
+/** A refund as reported by the provider. */
+export interface RefundView {
+  id: string;
+  /** PayPal: COMPLETED, PENDING, FAILED, CANCELLED. */
+  status: string;
+  amountValue: string;
+  currency: string;
+  /** Leash sets invoice_id = its own refund ID, so a refund can be found again after a lost response. */
+  invoiceId: string | null;
+  captureId: string | null;
+}
+
+/** A capture fetched on its own (used for reversals). */
+export interface CaptureDetailView extends CaptureView {
+  orderId: string | null;
+}
+
 export interface PurchaseUnitView {
   amountValue: string;
   currency: string;
@@ -24,6 +41,7 @@ export interface PurchaseUnitView {
   customId: string | null;
   invoiceId: string | null;
   captures: CaptureView[];
+  refunds: RefundView[];
 }
 
 /** An order, as fetched from the provider (never as described by a redirect or the browser). */
@@ -48,12 +66,43 @@ export interface CreateOrderRequest {
   cancelUrl: string;
 }
 
+export interface RefundRequest {
+  amountMinor: number;
+  currency: Currency;
+  /** Leash's refund ID. */
+  invoiceId: string;
+  /** Shown to the payer. */
+  note: string | null;
+}
+
+/** The transmission headers PayPal signs a webhook delivery with. */
+export interface WebhookTransmission {
+  authAlgo: string;
+  certUrl: string;
+  transmissionId: string;
+  transmissionSig: string;
+  transmissionTime: string;
+}
+
 export interface PaymentProvider {
   /** Idempotent per `requestId`: repeating it returns the same order. */
   createOrder(request: CreateOrderRequest, requestId: string): Promise<OrderView>;
   getOrder(orderId: string): Promise<OrderView>;
   /** Idempotent per `requestId`: repeating it never captures twice. */
   captureOrder(orderId: string, requestId: string): Promise<OrderView>;
+  /** Idempotent per `requestId`: repeating it never refunds twice. */
+  refundCapture(captureId: string, request: RefundRequest, requestId: string): Promise<RefundView>;
+  getRefund(refundId: string): Promise<RefundView>;
+  getCapture(captureId: string): Promise<CaptureDetailView>;
+  /**
+   * Asks the provider whether a webhook delivery is genuine. `rawBody` is
+   * passed through byte for byte. True only for a verified signature.
+   */
+  verifyWebhookSignature(
+    transmission: WebhookTransmission,
+    webhookId: string,
+    rawBody: string,
+  ): Promise<boolean>;
 }
 
 /**
@@ -81,3 +130,4 @@ export class PaymentProviderError extends Error {
 /** Stable idempotency keys: retries reuse them, so a request can't take effect twice. */
 export const orderRequestId = (transactionId: string) => `leash-order-${transactionId}`;
 export const captureRequestId = (transactionId: string) => `leash-capture-${transactionId}`;
+export const refundRequestId = (refundId: string) => `leash-refund-${refundId}`;

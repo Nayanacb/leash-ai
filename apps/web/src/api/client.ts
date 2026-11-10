@@ -77,8 +77,13 @@ export async function apiGet<S extends z.ZodType>(
 
 type Method = 'POST' | 'PATCH' | 'DELETE';
 
-async function send(method: Method, path: string, body: unknown): Promise<Response> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+async function send(
+  method: Method,
+  path: string,
+  body: unknown,
+  extraHeaders: Record<string, string> = {},
+): Promise<Response> {
+  const headers: Record<string, string> = { ...extraHeaders, Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (csrfToken) headers[CSRF_HEADER] = csrfToken;
   return fetch(path, {
@@ -94,8 +99,9 @@ export async function apiSend<S extends z.ZodType>(
   path: string,
   body: unknown,
   schema: S,
+  extraHeaders?: Record<string, string>,
 ): Promise<z.infer<S>> {
-  const res = await send(method, path, body);
+  const res = await send(method, path, body, extraHeaders);
   const data = await readBody(res);
   if (!res.ok) throw toError(res, data);
   return parseWith(schema, data, res.status);

@@ -18,6 +18,8 @@ const PAYMENT = {
   capturedMinor: null,
   capturedAt: null,
   failureReason: null,
+  refundedMinor: 0,
+  refundableMinor: 0,
 };
 
 const detail = (overrides: Record<string, unknown> = {}) => ({
@@ -46,6 +48,7 @@ const detail = (overrides: Record<string, unknown> = {}) => ({
   ledger: [],
   heldMinor: 1899,
   payment: PAYMENT,
+  refunds: [],
   audit: [],
   updatedAt: '2026-11-09T10:00:00.000Z',
   ...overrides,
@@ -195,5 +198,97 @@ describe('PayPal return page', () => {
       'href',
       `/transactions/${ID}`,
     );
+  });
+});
+
+describe('refunds', () => {
+  const paid = (overrides: Record<string, unknown> = {}) =>
+    detail({
+      status: 'CAPTURED',
+      payment: {
+        ...PAYMENT,
+        paypalOrderId: 'ORDER12345',
+        paypalCaptureId: 'CAP777',
+        capturedMinor: 1899,
+        refundableMinor: 1899,
+      },
+      ...overrides,
+    });
+
+  it('refunds with one idempotency key per dialog and the chosen amount', async () => {
+    const sent: { headers: Record<string, string>; body: unknown }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === 'POST' && url.endsWith('/refunds')) {
+          sent.push({
+            headers: init.headers as Record<string, string>,
+            body: JSON.parse(init.body as string),
+          });
+          return Promise.resolve(
+            jsonResponse(
+              200,
+              paid({
+                status: 'PARTIALLY_REFUNDED',
+                payment: {
+                  ...PAYMENT,
+                  capturedMinor: 1899,
+                  refundedMinor: 500,
+                  refundableMinor: 1399,
+                },
+              }),
+            ),
+          );
+        }
+        return Promise.resolve(jsonResponse(200, paid()));
+      }),
+    );
+    renderRoutes(detailRoutes, `/transactions/${ID}`);
+    fireEvent.click(await screen.findByRole('button', { name: 'Refund…' }));
+    const amount = await screen.findByLabelText('Amount (USD)');
+    expect(amount).toHaveValue('18.99');
+    fireEvent.change(amount, { target: { value: '5.00' } });
+    fireEvent.change(screen.getByLabelText('Reason (optional, shown to the buyer)'), {
+      target: { value: 'Too long' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).toEqual({
+      amount: { currency: 'USD', value: '5.00' },
+      reason: 'Too long',
+    });
+    expect(sent[0]!.headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('lists refunds (including ones made outside Leash) and explains a reversal', async () => {
+    const refunds = [
+      {
+        id: ID,
+        amountMinor: 500,
+        currency: 'USD',
+        status: 'COMPLETED',
+        source: 'PAYPAL',
+        reason: 'Refunded outside Leash (PayPal)',
+        failureReason: null,
+        createdAt: '2026-11-09T11:00:00.000Z',
+        completedAt: '2026-11-09T11:00:00.000Z',
+      },
+    ];
+    server({
+      [`GET /api/v1/transactions/${ID}`]: () =>
+        jsonResponse(
+          200,
+          paid({
+            status: 'REVERSED',
+            refunds,
+            payment: { ...PAYMENT, capturedMinor: 1899, refundedMinor: 1899, refundableMinor: 0 },
+          }),
+        ),
+    });
+    renderRoutes(detailRoutes, `/transactions/${ID}`);
+    expect(await screen.findByText('Payment reversed by PayPal')).toBeInTheDocument();
+    expect(screen.getByText('outside Leash (PayPal)')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refund…' })).toBeNull();
   });
 });

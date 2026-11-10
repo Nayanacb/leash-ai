@@ -2,11 +2,29 @@ import { randomBytes } from 'node:crypto';
 import { formatMinorAsDecimal } from '@leash/shared';
 import {
   PaymentProviderError,
+  type CaptureDetailView,
+  type RefundRequest,
+  type RefundView,
+  type WebhookTransmission,
   type CreateOrderRequest,
   type OrderView,
   type PaymentProvider,
   type PurchaseUnitView,
 } from '../../src/modules/payments/provider.js';
+
+export type RefundScript =
+  | 'COMPLETED'
+  | 'PENDING'
+  | 'FAILED'
+  /** PayPal refuses (422); nothing is refunded. */
+  | 'reject'
+  /** The request never reaches PayPal. */
+  | 'network-before'
+  /** PayPal refunds, but the response is lost. */
+  | 'network-after';
+
+/** Signature the fake accepts as genuine. */
+export const VALID_SIGNATURE = 'fake-valid-signature';
 
 export type CaptureScript =
   | 'COMPLETED'
@@ -38,7 +56,15 @@ export class FakePayPal implements PaymentProvider {
   capture: CaptureScript = 'COMPLETED';
   /** Delay inside capture, to widen race windows. */
   captureDelayMs = 0;
-  calls = { create: 0, get: 0, capture: 0 };
+  calls = { create: 0, get: 0, capture: 0, refund: 0, getRefund: 0, getCapture: 0, verify: 0 };
+  refund: RefundScript = 'COMPLETED';
+  /** Refunds that actually moved money back. */
+  refundExecutions = 0;
+  private refundsByRequestId = new Map<string, string>();
+  /** Bodies sent for verification, as received. */
+  verifiedBodies: string[] = [];
+  /** Webhook ID the fake expects. */
+  webhookId = 'WH-FAKE-ID';
   /** Captures that actually moved money. */
   captureExecutions = 0;
 
@@ -55,6 +81,7 @@ export class FakePayPal implements PaymentProvider {
       customId: request.transactionId,
       invoiceId: request.transactionId,
       captures: [],
+      refunds: [],
     };
     const order: OrderView = {
       id,
@@ -115,6 +142,81 @@ export class FakePayPal implements PaymentProvider {
     }
   }
 
+  private findCapture(captureId: string) {
+    for (const s of this.orders.values()) {
+      const unit = s.order.purchaseUnits[0]!;
+      const capture = unit.captures.find((c) => c.id === captureId);
+      if (capture) return { s, unit, capture };
+    }
+    throw new PaymentProviderError('not_found', 'RESOURCE_NOT_FOUND', 'no such capture', 404);
+  }
+
+  private findRefund(refundId: string) {
+    for (const s of this.orders.values()) {
+      const refund = s.order.purchaseUnits[0]!.refunds.find((r) => r.id === refundId);
+      if (refund) return refund;
+    }
+    throw new PaymentProviderError('not_found', 'RESOURCE_NOT_FOUND', 'no such refund', 404);
+  }
+
+  async refundCapture(
+    captureId: string,
+    request: RefundRequest,
+    requestId: string,
+  ): Promise<RefundView> {
+    this.calls.refund++;
+    const existing = this.refundsByRequestId.get(requestId);
+    if (existing) return clone(this.findRefund(existing));
+    const { unit, capture } = this.findCapture(captureId);
+    if (this.refund === 'network-before') {
+      throw new PaymentProviderError('ambiguous', 'TIMEOUT', 'timed out');
+    }
+    const refunded = unit.refunds
+      .filter((r) => r.status === 'COMPLETED' || r.status === 'PENDING')
+      .reduce((sum, r) => sum + Math.round(Number(r.amountValue) * 100), 0);
+    const captured = Math.round(Number(capture.amountValue) * 100);
+    if (this.refund === 'reject' || refunded + request.amountMinor > captured) {
+      throw new PaymentProviderError('rejected', 'REFUND_AMOUNT_EXCEEDED', 'refused', 422);
+    }
+    const status = this.refund === 'network-after' ? 'COMPLETED' : this.refund;
+    const view: RefundView = {
+      id: `RF${randomBytes(6).toString('hex').toUpperCase()}`,
+      status,
+      amountValue: formatMinorAsDecimal(request.amountMinor, request.currency),
+      currency: request.currency,
+      invoiceId: request.invoiceId,
+      captureId,
+    };
+    unit.refunds.push(view);
+    this.refundsByRequestId.set(requestId, view.id);
+    if (status !== 'FAILED') this.refundExecutions++;
+    if (this.refund === 'network-after') {
+      throw new PaymentProviderError('ambiguous', 'TIMEOUT', 'response lost');
+    }
+    return clone(view);
+  }
+
+  async getRefund(refundId: string): Promise<RefundView> {
+    this.calls.getRefund++;
+    return clone(this.findRefund(refundId));
+  }
+
+  async getCapture(captureId: string): Promise<CaptureDetailView> {
+    this.calls.getCapture++;
+    const { s, capture } = this.findCapture(captureId);
+    return { ...clone(capture), orderId: s.order.id };
+  }
+
+  async verifyWebhookSignature(
+    transmission: WebhookTransmission,
+    webhookId: string,
+    rawBody: string,
+  ): Promise<boolean> {
+    this.calls.verify++;
+    this.verifiedBodies.push(rawBody);
+    return transmission.transmissionSig === VALID_SIGNATURE && webhookId === this.webhookId;
+  }
+
   // ── Test controls ──
   /** The buyer approves the order on PayPal's page. */
   approve(orderId: string) {
@@ -129,6 +231,28 @@ export class FakePayPal implements PaymentProvider {
     const s = this.stored(orderId);
     s.order.purchaseUnits[0]!.captures[0]!.status = status;
     if (status === 'COMPLETED') s.order.status = 'COMPLETED';
+  }
+  /** A pending refund settles at PayPal. */
+  settleRefund(refundId: string, status: 'COMPLETED' | 'FAILED') {
+    this.findRefund(refundId).status = status;
+  }
+  /** Someone refunds in the PayPal dashboard (no Leash invoice ID). */
+  externalRefund(captureId: string, amountValue: string): RefundView {
+    const { unit, capture } = this.findCapture(captureId);
+    const view: RefundView = {
+      id: `RF${randomBytes(6).toString('hex').toUpperCase()}`,
+      status: 'COMPLETED',
+      amountValue,
+      currency: capture.currency,
+      invoiceId: null,
+      captureId,
+    };
+    unit.refunds.push(view);
+    return clone(view);
+  }
+  /** A chargeback / dispute reverses the capture. */
+  reverse(captureId: string) {
+    this.findCapture(captureId).capture.status = 'REVERSED';
   }
   void(orderId: string) {
     this.stored(orderId).order.status = 'VOIDED';

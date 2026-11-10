@@ -100,6 +100,7 @@ export const AgentReasonCodeSchema = z.enum([
   'REJECTED',
   'PAID',
   'PAYMENT_FAILED',
+  'REFUNDED',
 ]);
 export type AgentReasonCode = z.infer<typeof AgentReasonCodeSchema>;
 
@@ -210,7 +211,24 @@ export const TransactionDetailDtoSchema = TransactionSummaryDtoSchema.extend({
     capturedMinor: z.number().int().nullable(),
     capturedAt: z.string().nullable(),
     failureReason: z.string().nullable(),
+    refundedMinor: z.number().int(),
+    /** Captured minus completed and pending refunds. */
+    refundableMinor: z.number().int(),
   }),
+  refunds: z.array(
+    z.object({
+      id: z.uuid(),
+      amountMinor: z.number().int(),
+      currency: CurrencySchema,
+      status: z.enum(['PENDING', 'COMPLETED', 'FAILED']),
+      /** LEASH: requested in the dashboard. PAYPAL: made outside Leash (dashboard refund or reversal). */
+      source: z.enum(['LEASH', 'PAYPAL']),
+      reason: z.string().nullable(),
+      failureReason: z.string().nullable(),
+      createdAt: z.string(),
+      completedAt: z.string().nullable(),
+    }),
+  ),
   audit: z.array(
     z.object({
       action: z.string(),
@@ -276,3 +294,17 @@ export const CheckoutStartResponseSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('APPROVED') }),
 ]);
 export type CheckoutStartResponse = z.infer<typeof CheckoutStartResponseSchema>;
+
+/** A refund requested in the dashboard. Without an amount, everything still refundable is refunded. */
+export const RefundInputSchema = z.strictObject({
+  amount: MoneyInputSchema.optional(),
+  reason: z
+    .string()
+    .trim()
+    .max(255)
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+});
+export type RefundInput = z.infer<typeof RefundInputSchema>;
+/** What a client sends (before trimming). */
+export type RefundRequestBody = z.input<typeof RefundInputSchema>;

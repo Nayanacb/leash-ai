@@ -15,6 +15,8 @@ export interface RateLimitSettings {
   policyCompilesPerUserPerHour: number;
   /** Purchase requests (each may cost two LLM calls), per agent, per minute. */
   purchaseRequestsPerAgentPerMinute: number;
+  /** PayPal webhook deliveries, per client IP (each one costs a verification call to PayPal). */
+  webhooksPerIpPerMinute: number;
 }
 
 export const DEFAULT_RATE_LIMITS: RateLimitSettings = {
@@ -24,6 +26,7 @@ export const DEFAULT_RATE_LIMITS: RateLimitSettings = {
   agentPerKeyPerMinute: 120,
   policyCompilesPerUserPerHour: 20,
   purchaseRequestsPerAgentPerMinute: 30,
+  webhooksPerIpPerMinute: 120,
 };
 
 const FIFTEEN_MINUTES = 15 * 60_000;
@@ -80,6 +83,11 @@ export function createRateLimiters(settings: RateLimitSettings) {
       windowMs: 60_000,
       limit: settings.purchaseRequestsPerAgentPerMinute,
       keyGenerator: (req) => `purchase:${req.agentAuth?.agentId ?? 'anonymous'}`,
+    }),
+    webhooksPerIp: limiter({
+      windowMs: 60_000,
+      limit: settings.webhooksPerIpPerMinute,
+      keyGenerator: (req) => `webhook:${ipKeyGenerator(req.ip ?? 'unknown')}`,
     }),
     agentPerKey: limiter({
       windowMs: 60_000,

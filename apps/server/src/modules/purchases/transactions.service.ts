@@ -80,6 +80,7 @@ export async function getTransaction(
       evaluations: { orderBy: { createdAt: 'asc' } },
       approval: true,
       ledgerEntries: { orderBy: { createdAt: 'asc' } },
+      refunds: { orderBy: { createdAt: 'asc' } },
     },
   });
   if (!t) throw AppError.notFound('Transaction not found');
@@ -158,7 +159,29 @@ export async function getTransaction(
       capturedMinor: t.capturedMinor,
       capturedAt: t.capturedAt?.toISOString() ?? null,
       failureReason: t.paymentFailureReason,
+      refundedMinor: t.refundedMinor,
+      refundableMinor:
+        (t.status === 'CAPTURED' || t.status === 'PARTIALLY_REFUNDED') && t.capturedMinor !== null
+          ? Math.max(
+              0,
+              t.capturedMinor -
+                t.refunds
+                  .filter((r) => r.status !== 'FAILED')
+                  .reduce((sum, r) => sum + r.amountMinor, 0),
+            )
+          : 0,
     },
+    refunds: t.refunds.map((r) => ({
+      id: r.id,
+      amountMinor: r.amountMinor,
+      currency: r.currency as Currency,
+      status: r.status,
+      source: r.source,
+      reason: r.reason,
+      failureReason: r.failureReason,
+      createdAt: r.createdAt.toISOString(),
+      completedAt: r.completedAt?.toISOString() ?? null,
+    })),
     audit: audit.map((a) => ({
       action: a.action,
       actorType: a.actorType,

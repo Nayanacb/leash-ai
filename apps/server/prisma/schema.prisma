@@ -370,51 +370,73 @@ model LedgerEntry {
   type          LedgerEntryType
   amountMinor   Int
   currency      String          @db.Char(3)
+  /// Set on REFUND entries: at most one budget credit per refund.
+  refundId      String?         @unique @db.Uuid
   createdAt     DateTime        @default(now())
 
   user        User        @relation(fields: [userId], references: [id])
   transaction Transaction @relation(fields: [transactionId], references: [id])
+  refund      Refund?     @relation(fields: [refundId], references: [id], onDelete: Restrict)
 
   @@index([userId, currency, createdAt])
   @@index([transactionId])
 }
 
+/// Where a refund was initiated: by the user in Leash, or outside Leash (PayPal
+/// dashboard, or a reversal/chargeback) and picked up by webhook or reconciliation.
+enum RefundSource {
+  LEASH
+  PAYPAL
+}
+
 model Refund {
   id                String       @id @default(uuid(7)) @db.Uuid
   transactionId     String       @db.Uuid
+  /// Scoped per user ("<userId>:<key>"), or "paypal:<refundId>" / "reversal:<captureId>".
   idempotencyKey    String       @unique
   paypalRefundId    String?      @unique
   amountMinor       Int
   currency          String       @db.Char(3)
   status            RefundStatus @default(PENDING)
+  source            RefundSource @default(LEASH)
   reason            String?
-  requestedByUserId String       @db.Uuid
+  failureReason     String?
+  /// Null for refunds that did not start in Leash.
+  requestedByUserId String?      @db.Uuid
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
+  completedAt       DateTime?
 
-  transaction Transaction @relation(fields: [transactionId], references: [id])
-  requestedBy User        @relation(fields: [requestedByUserId], references: [id])
+  transaction   Transaction   @relation(fields: [transactionId], references: [id])
+  requestedBy   User?         @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  ledgerEntries LedgerEntry[]
 
   @@index([transactionId])
+  @@index([status, updatedAt])
 }
 
 model WebhookEvent {
-  id            String    @id @default(uuid(7)) @db.Uuid
+  id             String    @id @default(uuid(7)) @db.Uuid
   /// PayPal's event ID; unique so replays are ignored.
-  paypalEventId String    @unique
-  eventType     String
-  resourceId    String?
-  payload       Json
-  verified      Boolean
-  transactionId String?   @db.Uuid
-  receivedAt    DateTime  @default(now())
-  processedAt   DateTime?
-  error         String?
+  paypalEventId  String    @unique
+  eventType      String
+  resourceId     String?
+  /// A minimal summary (IDs, status, amount) — never the payer's details.
+  payload        Json
+  /// Only signature-verified events are stored.
+  verified       Boolean
+  transmissionId String?
+  attempts       Int       @default(0)
+  transactionId  String?   @db.Uuid
+  receivedAt     DateTime  @default(now())
+  processedAt    DateTime?
+  error          String?
 
   transaction Transaction? @relation(fields: [transactionId], references: [id])
 
   @@index([transactionId])
   @@index([eventType, receivedAt])
+  @@index([processedAt, receivedAt])
 }
 
 /// Append-only, hash-chained audit log. UPDATE/DELETE/TRUNCATE are rejected by triggers.

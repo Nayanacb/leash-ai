@@ -29,6 +29,7 @@ import { approvalsRouter } from './modules/approvals/approvals.routes.js';
 import { paymentProviderFromConfig } from './modules/payments/paypal/checkout.js';
 import type { PaymentProvider } from './modules/payments/provider.js';
 import { paymentsRouter } from './modules/payments/payments.routes.js';
+import { paypalWebhookHandler } from './modules/payments/webhooks.js';
 import { PURCHASE_REQUEST_MAX_BODY_BYTES } from '@leash/shared';
 import { healthRouter } from './routes/health.js';
 
@@ -100,7 +101,19 @@ export function createApp(deps: AppDeps): Express {
 
   // No CORS middleware on purpose: the dashboard is served from the same origin
   // (Vite proxies /api in development), so cross-origin requests are refused by default.
-  // PayPal webhooks (Phase 8) will mount a raw-body route *before* this parser.
+  // PayPal webhooks: the raw body is needed byte for byte for signature verification,
+  // so this route is mounted *before* the JSON parsers. No session, CSRF or origin
+  // guard (PayPal is the caller); PayPal's own verification is the authentication.
+  app.post(
+    '/api/webhooks/paypal',
+    limiters.webhooksPerIp,
+    express.raw({ type: () => true, limit: '64kb' }),
+    (_req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store');
+      next();
+    },
+    paypalWebhookHandler(ctx),
+  );
   // Purchase requests carry source context, so they get a larger (but still bounded) body limit.
   // Mounted first: the global parser below skips bodies that are already parsed.
   app.use(

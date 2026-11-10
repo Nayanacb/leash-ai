@@ -3,6 +3,8 @@ import type { Database } from '../db.js';
 import type { Logger } from '../lib/logger.js';
 import { sweepReservations } from '../modules/budget/recovery.js';
 import { reconcileCapturingPayments } from '../modules/payments/checkout.service.js';
+import { reconcilePendingRefunds } from '../modules/payments/refunds.service.js';
+import { reprocessWebhookEvents } from '../modules/payments/webhooks.js';
 import type { PaymentProvider } from '../modules/payments/provider.js';
 
 export interface BackgroundJobs {
@@ -51,10 +53,26 @@ export function startBackgroundJobs(deps: {
       }
       try {
         // Purchases left in CAPTURING (pending or unknown outcome) — PayPal is read first.
-        const payments = await reconcileCapturingPayments({ db, config, provider, logger });
-        if (payments.settled.length || payments.failed.length) {
+        const deps = { db, config, provider, logger };
+        const payments = await reconcileCapturingPayments(deps);
+        // Refunds left pending (or with an unknown outcome): PayPal is read first.
+        const refunds = await reconcilePendingRefunds(deps);
+        // Verified webhook events whose processing failed.
+        const webhooks = await reprocessWebhookEvents(deps);
+        if (
+          payments.settled.length ||
+          payments.failed.length ||
+          refunds.settled.length ||
+          refunds.failed.length ||
+          webhooks.processed ||
+          webhooks.failed
+        ) {
           logger.info(
-            { settled: payments.settled.length, failed: payments.failed.length },
+            {
+              captures: { settled: payments.settled.length, failed: payments.failed.length },
+              refunds: { settled: refunds.settled.length, failed: refunds.failed.length },
+              webhooks,
+            },
             'payment reconciliation',
           );
         }

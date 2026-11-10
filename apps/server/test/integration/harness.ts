@@ -35,6 +35,7 @@ const GENEROUS_LIMITS: RateLimitSettings = {
   agentPerKeyPerMinute: 100_000,
   policyCompilesPerUserPerHour: 100_000,
   purchaseRequestsPerAgentPerMinute: 100_000,
+  webhooksPerIpPerMinute: 100_000,
 };
 
 export function makeApp(

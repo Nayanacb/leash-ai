@@ -8,16 +8,16 @@ The full design lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Status
 
-| Phase | Scope                                                                         | State    |
-| ----- | ----------------------------------------------------------------------------- | -------- |
-| 1     | Architecture                                                                  | Done     |
-| 2     | Foundations: monorepo, schema, config + sandbox guard, logging, health, shell | Done     |
-| 3     | Identity & setup: auth, agents + API keys, merchants, tasks, audit log        | Done     |
-| 4     | Policy compiler, deterministic engine, budget ledger, policy review UI        | Done     |
-| 5     | Purchase requests, injection + intent checks, decision combiner, transactions | Done     |
-| 6     | Human approval: queue, approve/reject with step-up + snapshot hash, expiry    | Done     |
-| 7     | PayPal sandbox checkout: order, buyer approval, verify-then-capture           | Done     |
-| 8+    | Webhooks, refunds                                                             | Upcoming |
+| Phase | Scope                                                                         | State |
+| ----- | ----------------------------------------------------------------------------- | ----- |
+| 1     | Architecture                                                                  | Done  |
+| 2     | Foundations: monorepo, schema, config + sandbox guard, logging, health, shell | Done  |
+| 3     | Identity & setup: auth, agents + API keys, merchants, tasks, audit log        | Done  |
+| 4     | Policy compiler, deterministic engine, budget ledger, policy review UI        | Done  |
+| 5     | Purchase requests, injection + intent checks, decision combiner, transactions | Done  |
+| 6     | Human approval: queue, approve/reject with step-up + snapshot hash, expiry    | Done  |
+| 7     | PayPal sandbox checkout: order, buyer approval, verify-then-capture           | Done  |
+| 8     | PayPal webhooks (verified), refunds, reversals, reconciliation                | Done  |
 
 ## Repository layout
 
@@ -107,6 +107,24 @@ npm run paypal:smoke -w @leash/server -- --payee <sandbox business email>
 ```
 
 Dashboard endpoints: `POST /api/v1/transactions/:id/checkout` → `{ status: "REDIRECT", approveUrl }` or `{ status: "APPROVED" }`; `POST /api/v1/transactions/:id/checkout/complete` → the transaction.
+
+### Refunds
+
+A captured purchase shows **Refund…** on its detail page: refund everything (the default) or part of it, with an optional reason shown to the buyer. Several partial refunds are allowed, never more than was captured — refunds still being processed count, so two refunds at once can't exceed it. Each refund dialog sends its own `Idempotency-Key`, so retrying never refunds twice. A completed refund credits its amount back to your spending budget exactly once (the purchase still counts toward "max purchases per period" rules). If PayPal's answer is lost, the refund stays **pending**; the background sweep looks for it at PayPal first and only then re-sends it with the same PayPal request ID. Refunds made in the PayPal dashboard and payment reversals (chargebacks) are recorded too, as "outside Leash (PayPal)".
+
+`POST /api/v1/transactions/:id/refunds` with header `Idempotency-Key` and body `{ amount?: { currency, value }, reason? }`. Agents can't refund; they see `PARTIALLY_REFUNDED` / `REFUNDED` / `REVERSED` with reason `REFUNDED`.
+
+### PayPal webhooks (optional)
+
+`POST /api/webhooks/paypal` receives `CHECKOUT.ORDER.APPROVED` and `PAYMENT.CAPTURE.COMPLETED / PENDING / DENIED / REFUNDED / REVERSED`. Every delivery is verified by PayPal (`verify-webhook-signature`, your `PAYPAL_WEBHOOK_ID`, the body byte for byte); unverified ones are rejected and not stored. A webhook is only a hint: Leash re-reads the order, capture or refund from PayPal before changing anything, never authorizes a purchase, and captures only through the same checks as the return page (so a buyer who approves at PayPal and closes the tab is still paid correctly). Duplicate deliveries are processed once; out-of-order ones are harmless. Without webhooks everything still works through the return page and the sweep — webhooks only make it faster and pick up changes made outside Leash.
+
+Local setup: PayPal can only reach a public HTTPS URL, so run a tunnel of your choice to the API server (e.g. `cloudflared tunnel --url http://localhost:4000` or `ngrok http 4000`), then in developer.paypal.com → your sandbox app → **Add Webhook**: URL `https://<tunnel host>/api/webhooks/paypal`, events listed above. Put the webhook ID in `PAYPAL_WEBHOOK_ID` and restart. Check it:
+
+```bash
+npm run paypal:smoke -w @leash/server -- --webhook
+```
+
+PayPal's _Webhooks Simulator_ sends mock events that PayPal's own verification rejects, so Leash answers them with 400 — test with a real sandbox checkout and refund instead.
 
 ## Configuration
 

@@ -58,7 +58,10 @@ const DETAIL = {
     capturedMinor: null,
     capturedAt: null,
     failureReason: null,
+    refundedMinor: 0,
+    refundableMinor: 0,
   },
+  refunds: [],
   audit: [],
   updatedAt: '2026-11-09T10:05:00.000Z',
 };

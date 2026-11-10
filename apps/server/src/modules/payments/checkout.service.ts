@@ -44,7 +44,7 @@ export interface PaymentDeps {
 
 const CHECKOUT_STARTED: TransactionStatus[] = ['ORDER_CREATED', 'BUYER_APPROVED'];
 
-function requireProvider(provider: PaymentProvider | null): PaymentProvider {
+export function requireProvider(provider: PaymentProvider | null): PaymentProvider {
   if (!provider) {
     throw new AppError(
       503,
@@ -85,9 +85,9 @@ function authorizedPayment(t: Transaction): AuthorizedPayment {
 const isExpired = (t: Pick<Transaction, 'authorizationExpiresAt'>, now: Date) =>
   !t.authorizationExpiresAt || t.authorizationExpiresAt.getTime() <= now.getTime();
 
-const describeStatus = (s: TransactionStatus) => s.toLowerCase().replaceAll('_', ' ');
+export const describeStatus = (s: TransactionStatus) => s.toLowerCase().replaceAll('_', ' ');
 
-async function loadOwned(db: Database, userId: string, id: string) {
+export async function loadOwned(db: Database, userId: string, id: string) {
   const t = await db.transaction.findFirst({
     where: { id, userId },
     include: { merchant: { select: { paypalEmail: true } } },
@@ -96,7 +96,7 @@ async function loadOwned(db: Database, userId: string, id: string) {
   return t;
 }
 
-async function audit(
+export async function audit(
   tx: Prisma.TransactionClient,
   t: { id: string; userId: string },
   actor: { type: 'USER' | 'SYSTEM'; id: string | null },
@@ -117,7 +117,7 @@ async function audit(
  * Marks the payment failed and releases the funds (exactly once: release is
  * idempotent and the status change is a CAS). Caller holds the budget lock.
  */
-async function failPaymentWithin(
+export async function failPaymentWithin(
   tx: Prisma.TransactionClient,
   t: { id: string; userId: string },
   from: TransactionStatus[],
@@ -145,7 +145,7 @@ async function failPaymentWithin(
   return true;
 }
 
-async function withLock<T>(
+export async function withLock<T>(
   db: Database,
   userId: string,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
@@ -300,7 +300,7 @@ type Settlement = 'captured' | 'pending' | 'failed' | 'none' | 'unchanged';
  * Applies what the order says about money movement to a purchase in
  * CAPTURING. Returns 'none' when PayPal shows no capture at all.
  */
-async function settleFromOrder(
+export async function settleFromOrder(
   deps: PaymentDeps,
   t: Transaction,
   order: OrderView,
@@ -449,17 +449,37 @@ export async function completeCheckout(
   actor: Actor,
   transactionId: string,
 ): Promise<TransactionDetailDto> {
-  const { db, config } = deps;
-  const t = await loadOwned(db, actor.userId, transactionId);
-  const provider = requireProvider(deps.provider);
-  const userActor = { type: 'USER' as const, id: actor.userId };
+  const t = await loadOwned(deps.db, actor.userId, transactionId);
+  await runCompletion(deps, t, { type: 'USER', id: actor.userId, meta: actor.meta });
+  return getTransaction(deps.db, actor.userId, t.id);
+}
 
-  if (t.status === 'CAPTURED') return getTransaction(db, actor.userId, t.id);
+export interface Completer {
+  type: 'USER' | 'SYSTEM';
+  id: string | null;
+  meta: Record<string, unknown>;
+}
+
+/**
+ * The completion flow shared by the dashboard return page (the user) and the
+ * CHECKOUT.ORDER.APPROVED webhook (the system). Either way every check runs
+ * against PayPal's current state, fetched server-side.
+ */
+export async function runCompletion(
+  deps: PaymentDeps,
+  t: Transaction,
+  completer: Completer,
+): Promise<void> {
+  const { db, config } = deps;
+  const provider = requireProvider(deps.provider);
+  const userActor = { type: completer.type, id: completer.id };
+
+  if (t.status === 'CAPTURED') return;
   if (t.status === 'CAPTURING') {
     // Another request is capturing (or the outcome was unknown). Read, never re-capture here.
     const order = await provider.getOrder(t.paypalOrderId!).catch(() => null);
     if (order) await settleFromOrder(deps, t, order, userActor);
-    return getTransaction(db, actor.userId, t.id);
+    return;
   }
   if (!CHECKOUT_STARTED.includes(t.status) || !t.paypalOrderId) {
     throw new AppError(
@@ -595,14 +615,13 @@ export async function completeCheckout(
       orderId: expected.orderId,
       buyerApprovalVerified: true,
       recheck: { decision: recheck.decision, reasonCodes: recheck.reasonCodes },
-      ...actor.meta,
+      ...completer.meta,
     });
     return { next: 'capture', t: { ...current, status: 'CAPTURING' } };
   });
 
   if (gate.next === 'error') throw gate.error;
   if (gate.next === 'capture') await captureAndSettle(deps, provider, gate.t, userActor);
-  return getTransaction(db, actor.userId, t.id);
 }
 
 // ── Reconciliation sweep ───────────────────────────────────────────────────

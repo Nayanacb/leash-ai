@@ -384,9 +384,24 @@ Idempotency: same agent + key + body → same transaction (201 first, then 200; 
 
 Verified via PayPal's `verify-webhook-signature` API (transmission headers + configured webhook ID; we never fetch `cert_url` ourselves). Dedupe on `paypalEventId`. Handled: `CHECKOUT.ORDER.APPROVED`, `PAYMENT.CAPTURE.COMPLETED/DENIED/PENDING/REFUNDED/REVERSED`. Webhooks reconcile; they can **never** move a transaction into AUTHORIZED.
 
+### 6.4a Webhooks as implemented (Phase 8)
+
+- **Route:** `POST /api/webhooks/paypal`, mounted before the JSON parsers with `express.raw` (64 KB), its own per-IP limiter (`webhooksPerIpPerMinute`), no session/CSRF/origin guard. 503 until `PAYPAL_WEBHOOK_ID` and credentials are set (PayPal retries).
+- **Checks, in order:** the five `PayPal-*` headers present and well-formed; `cert_url` HTTPS on `api.sandbox.paypal.com`/`api-m.sandbox.paypal.com` (never fetched by Leash); transmission time within ±15 minutes (replays); body a single JSON object with `id`, `event_type`, `resource`; then PayPal's `verify-webhook-signature`, sent the raw body **byte for byte** (spliced into the request after checking it parses as one object). Failure → 400, logged by transmission ID, nothing stored. Verification unavailable → 503.
+- **Storage / dedupe:** verified events only, keyed by PayPal event ID (unique). `payload` holds a minimal summary (type, resource ID, status, amount, order ID, create time) — no payer details. A duplicate that was processed → 200 `{duplicate: true}`; one that wasn't → processed again. Failure → error saved, 500 (PayPal redelivers) and the sweep retries (≤ 5 attempts).
+- **Handlers** (`webhooks.ts`) re-read PayPal and reuse existing code: `CHECKOUT.ORDER.APPROVED` → `runCompletion` as the SYSTEM actor (identical checks to the return page; 409 outcomes are recorded, not retried); `PAYMENT.CAPTURE.*` → `settleFromOrder` for purchases in CAPTURING; `REFUNDED` → `syncRefundFromPayPal`; `REVERSED` → `recordReversal`. Unknown resources → `payment.webhook_unmatched` audit, no change. No handler can move a purchase into AUTHORIZED or revive a terminal one.
+
 ### 6.5 Refunds
 
 User-initiated only (agents cannot refund in v1). Amount ≤ captured − already refunded. Idempotent via `PayPal-Request-Id`. A completed refund writes a REFUND ledger entry, restoring budget.
+
+### 6.5a Refunds as implemented (Phase 8)
+
+- **Request** (`refunds.service.ts`): session + CSRF (no step-up, as approved), `Idempotency-Key` stored as `<userId>:<key>` (same key + different amount → 409). Under the budget lock: purchase CAPTURED or PARTIALLY_REFUNDED; amount ≤ captured − (completed + pending refunds); insert a PENDING `Refund`. Then, outside the lock, PayPal `captures/{id}/refund` with `PayPal-Request-Id = leash-refund-<refundId>` and `invoice_id = <refundId>`.
+- **Settle:** COMPLETED → CAS refund PENDING→COMPLETED, one `REFUND` ledger entry (unique `LedgerEntry.refundId`, capped at the unrefunded remainder) — which restores period and task budget (purchase-count rules still count the purchase), `refundedMinor`, status PARTIALLY_REFUNDED/REFUNDED. PENDING → kept, PayPal ID stored. FAILED/CANCELLED or refused (after confirming on the order that no refund carries our `invoice_id`) → FAILED, no credit.
+- **Uncertain outcomes** stay PENDING. `reconcilePendingRefunds` (sweep, refunds pending ≥ 2 min): with a PayPal ID → GET the refund; without → GET the order and look for our `invoice_id`; found → settle; not found → re-send with the **same** request ID; still nothing after 24 h → FAILED + `payment_anomaly` for review.
+- **Outside Leash:** refunds PayPal reports that Leash didn't start are recorded as `source = PAYPAL` (`idempotencyKey = paypal:<refundId>`); reversals confirmed by `GET captures/{id}` (status REVERSED) credit the unrefunded remainder once (`reversal:<captureId>`) and set REVERSED.
+- **Migration** `phase8_webhooks_refunds`: `RefundSource` enum; `Refund.source/failureReason/completedAt`, `requestedByUserId` nullable; `LedgerEntry.refundId` (unique, FK); `WebhookEvent.transmissionId/attempts`; indexes for the sweeps.
 
 ### 6.6 Policy compilation
 

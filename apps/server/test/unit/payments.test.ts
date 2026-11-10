@@ -8,6 +8,7 @@ import {
 } from '../../src/modules/payments/paypal/checkout.js';
 import { PaymentProviderError, type OrderView } from '../../src/modules/payments/provider.js';
 import { captureOutcome, orderMismatches } from '../../src/modules/payments/verify.js';
+import { readTransmission, summarizeEvent } from '../../src/modules/payments/webhooks.js';
 
 const TX = '0196a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b';
 const EXPECTED = {
@@ -32,6 +33,7 @@ function order(
         currency: 'USD',
         payeeEmail: 'Pay@Paper.example.test',
         payeeMerchantId: 'MERCH1',
+        refunds: [],
         customId: TX,
         invoiceId: TX,
         captures: [],
@@ -276,5 +278,178 @@ describe('PayPalClient', () => {
       PaymentProviderError,
     );
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('refunds, captures and webhook verification (PayPal provider)', () => {
+  const provider = (handler: (url: URL, init: RequestInit) => Response) => {
+    const f = fakeFetch((url, init) =>
+      url.pathname === '/v1/oauth2/token' ? token() : handler(url, init),
+    );
+    return {
+      calls: f.calls,
+      provider: new PayPalCheckoutProvider(
+        new PayPalClient({ clientId: 'c', clientSecret: SECRET, fetch: f.fetch }),
+      ),
+    };
+  };
+  const refundBody = {
+    id: 'REFUND12345',
+    status: 'COMPLETED',
+    amount: { currency_code: 'USD', value: '5.00' },
+    invoice_id: TX,
+    links: [
+      { rel: 'up', href: 'https://api-m.sandbox.paypal.com/v2/payments/captures/CAP12345678' },
+    ],
+  };
+
+  it('refunds with a stable request ID, the amount as a decimal and a printable note', async () => {
+    const { provider: p, calls } = provider(() => json(201, refundBody));
+    const view = await p.refundCapture(
+      'CAP12345678',
+      { amountMinor: 500, currency: 'USD', invoiceId: TX, note: 'Wrong\u0000 size\n' },
+      'leash-refund-1',
+    );
+    expect(view).toEqual({
+      id: 'REFUND12345',
+      status: 'COMPLETED',
+      amountValue: '5.00',
+      currency: 'USD',
+      invoiceId: TX,
+      captureId: 'CAP12345678',
+    });
+    const call = calls.find((c) => c.url.pathname.endsWith('/refund'))!;
+    expect(call.url.pathname).toBe('/v2/payments/captures/CAP12345678/refund');
+    expect((call.init.headers as Record<string, string>)['PayPal-Request-Id']).toBe(
+      'leash-refund-1',
+    );
+    expect(JSON.parse(call.init.body as string)).toEqual({
+      amount: { currency_code: 'USD', value: '5.00' },
+      invoice_id: TX,
+      note_to_payer: 'Wrong size',
+    });
+  });
+
+  it('reads refunds and captures, and refuses IDs that could alter the path', async () => {
+    const { provider: p } = provider((url) =>
+      url.pathname.startsWith('/v2/payments/refunds/')
+        ? json(200, refundBody)
+        : json(200, {
+            id: 'CAP12345678',
+            status: 'REVERSED',
+            amount: { currency_code: 'USD', value: '18.99' },
+            supplementary_data: { related_ids: { order_id: 'ORDER12345' } },
+          }),
+    );
+    expect((await p.getRefund('REFUND12345')).captureId).toBe('CAP12345678');
+    expect(await p.getCapture('CAP12345678')).toMatchObject({
+      status: 'REVERSED',
+      orderId: 'ORDER12345',
+    });
+    await expect(p.getRefund('../../v1/x')).rejects.toBeInstanceOf(PaymentProviderError);
+  });
+
+  it('parses refunds listed on an order', () => {
+    const o = parseOrder({
+      id: 'ORDER12345',
+      status: 'COMPLETED',
+      purchase_units: [
+        {
+          amount: { currency_code: 'USD', value: '18.99' },
+          payments: { captures: [], refunds: [refundBody] },
+        },
+      ],
+    });
+    expect(o.purchaseUnits[0]!.refunds).toEqual([
+      expect.objectContaining({ id: 'REFUND12345', invoiceId: TX }),
+    ]);
+  });
+
+  const transmission = {
+    authAlgo: 'SHA256withRSA',
+    certUrl: 'https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1',
+    transmissionId: 't-1',
+    transmissionSig: 'sig==',
+    transmissionTime: '2026-11-10T10:00:00Z',
+  };
+
+  it('verifies a webhook by sending the event to PayPal byte for byte', async () => {
+    // Deliberately unusual formatting: re-serializing would change it.
+    const raw = '{"id":"WH-1",  "event_type":"X","resource":{"amount":1.10,"n":"\\u00e9"}}';
+    const { provider: p, calls } = provider(() => json(200, { verification_status: 'SUCCESS' }));
+    expect(await p.verifyWebhookSignature(transmission, 'WEBHOOK-ID', raw)).toBe(true);
+    const sent = calls.find(
+      (c) => c.url.pathname === '/v1/notifications/verify-webhook-signature',
+    )!;
+    const body = sent.init.body as string;
+    expect(body.endsWith(`"webhook_event":${raw}}`)).toBe(true);
+    expect(JSON.parse(body)).toMatchObject({
+      webhook_id: 'WEBHOOK-ID',
+      transmission_id: 't-1',
+      cert_url: transmission.certUrl,
+    });
+  });
+
+  it('rejects failed verifications and bodies that are not a single JSON object', async () => {
+    const { provider: p, calls } = provider(() => json(200, { verification_status: 'FAILURE' }));
+    expect(await p.verifyWebhookSignature(transmission, 'W', '{"id":"x"}')).toBe(false);
+    const before = calls.length;
+    for (const raw of ['', 'not json', '[1]', '1,"webhook_id":"other"', 'null']) {
+      expect(await p.verifyWebhookSignature(transmission, 'W', raw)).toBe(false);
+    }
+    expect(calls.length).toBe(before); // never sent to PayPal
+  });
+});
+
+describe('webhook transmission checks and summaries', () => {
+  const now = new Date('2026-11-10T10:00:00Z');
+  const headers: Record<string, string> = {
+    'paypal-transmission-id': 'abc-123',
+    'paypal-transmission-time': '2026-11-10T09:55:00Z',
+    'paypal-transmission-sig': 'c2lnbmF0dXJl==',
+    'paypal-cert-url': 'https://api.sandbox.paypal.com/v1/notifications/certs/CERT-1',
+    'paypal-auth-algo': 'SHA256withRSA',
+  };
+  const read = (overrides: Record<string, string | undefined>) =>
+    readTransmission((n) => ({ ...headers, ...overrides })[n], now);
+
+  it('accepts a well-formed sandbox delivery inside the time window', () => {
+    expect(read({})).toMatchObject({ ok: true, transmission: { transmissionId: 'abc-123' } });
+  });
+
+  it.each([
+    ['MISSING_HEADERS', { 'paypal-transmission-sig': undefined }],
+    ['MISSING_HEADERS', { 'paypal-auth-algo': 'SHA256 withRSA' }],
+    ['BAD_CERT_URL', { 'paypal-cert-url': 'https://api.paypal.com/v1/notifications/certs/C' }],
+    ['BAD_CERT_URL', { 'paypal-cert-url': 'http://api.sandbox.paypal.com/certs/C' }],
+    ['BAD_CERT_URL', { 'paypal-cert-url': 'https://api.sandbox.paypal.com.evil.example/C' }],
+    ['STALE_TRANSMISSION', { 'paypal-transmission-time': '2026-11-10T09:40:00Z' }],
+    ['STALE_TRANSMISSION', { 'paypal-transmission-time': 'yesterday' }],
+  ])('rejects %s', (reason, overrides) => {
+    expect(read(overrides)).toEqual({ ok: false, reason });
+  });
+
+  it('keeps identifiers, status and amount — never payer details', () => {
+    const summary = summarizeEvent({
+      id: 'WH-1',
+      event_type: 'PAYMENT.CAPTURE.COMPLETED',
+      resource: {
+        id: 'CAP1',
+        status: 'COMPLETED',
+        amount: { currency_code: 'USD', value: '18.99' },
+        supplementary_data: { related_ids: { order_id: 'ORDER1' } },
+        payer: { email_address: 'buyer@example.test' },
+        payee: { email_address: 'merchant@example.test' },
+      },
+    });
+    expect(summary).toEqual({
+      eventType: 'PAYMENT.CAPTURE.COMPLETED',
+      resourceType: null,
+      resourceId: 'CAP1',
+      status: 'COMPLETED',
+      amount: { currency: 'USD', value: '18.99' },
+      orderId: 'ORDER1',
+      createTime: null,
+    });
   });
 });

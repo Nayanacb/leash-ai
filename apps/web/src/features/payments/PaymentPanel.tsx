@@ -5,8 +5,10 @@ import { Button } from '../../components/ui/Button';
 import { ErrorMessage } from '../../components/ui/Feedback';
 import { formatDateTime, formatMoney } from '../../lib/format';
 import { leaveForExternalPage } from '../../lib/navigation';
+import { RefundSection } from './RefundSection';
 
 const AWAITING_PAYMENT = new Set(['AUTHORIZED', 'ORDER_CREATED', 'BUYER_APPROVED']);
+const PAID = new Set(['CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED', 'REVERSED']);
 
 const FAILURE_REASONS: Record<string, string> = {
   PAYMENT_DECLINED: 'PayPal declined the payment.',
@@ -78,10 +80,27 @@ export function PaymentPanel({ t }: { t: TransactionDetailDto }) {
     );
   }
 
-  if (t.status === 'CAPTURED') {
+  if (PAID.has(t.status)) {
+    const reversed = t.status === 'REVERSED';
     return (
-      <div className={`${box} bg-emerald-50 text-emerald-950 ring-emerald-600/20`}>
-        <p className="font-semibold">Paid</p>
+      <div
+        className={`${box} ${reversed ? 'bg-rose-50 text-rose-950 ring-rose-600/20' : 'bg-emerald-50 text-emerald-950 ring-emerald-600/20'}`}
+      >
+        <p className="font-semibold">
+          {reversed
+            ? 'Payment reversed by PayPal'
+            : t.status === 'REFUNDED'
+              ? 'Paid · fully refunded'
+              : t.status === 'PARTIALLY_REFUNDED'
+                ? `Paid · ${formatMoney(t.payment.refundedMinor, t.currency)} refunded`
+                : 'Paid'}
+        </p>
+        {reversed && (
+          <p className="mt-1">
+            A chargeback or dispute reversed this payment. The unrefunded amount was credited back
+            to your budget.
+          </p>
+        )}
         <p className="mt-1">
           {formatMoney(t.payment.capturedMinor ?? t.amountMinor, t.currency)} captured
           {t.payment.capturedAt && <> on {formatDateTime(t.payment.capturedAt)}</>} to{' '}
@@ -91,6 +110,7 @@ export function PaymentPanel({ t }: { t: TransactionDetailDto }) {
           PayPal order <span className="font-mono">{t.payment.paypalOrderId}</span> · capture{' '}
           <span className="font-mono">{t.payment.paypalCaptureId}</span> (sandbox)
         </p>
+        <RefundSection t={t} />
       </div>
     );
   }

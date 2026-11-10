@@ -127,7 +127,12 @@ export class PayPalClient {
   async request(
     method: 'GET' | 'POST',
     path: string,
-    options: { body?: unknown; requestId?: string } = {},
+    options: {
+      body?: unknown;
+      /** A pre-serialized JSON body, sent exactly as given (webhook verification). */
+      rawJson?: string;
+      requestId?: string;
+    } = {},
   ): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
       const token = await this.accessToken();
@@ -140,7 +145,11 @@ export class PayPalClient {
           ...(method === 'POST' ? { 'Content-Type': 'application/json' } : {}),
           ...(options.requestId ? { 'PayPal-Request-Id': options.requestId } : {}),
         },
-        ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+        ...(options.rawJson !== undefined
+          ? { body: options.rawJson }
+          : options.body !== undefined
+            ? { body: JSON.stringify(options.body) }
+            : {}),
       });
       const body: unknown = await res.json().catch(() => null);
       if (res.ok) return body;

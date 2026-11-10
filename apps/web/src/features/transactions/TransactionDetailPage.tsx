@@ -193,7 +193,15 @@ function TransactionDetail({ t }: { t: TransactionDetailDto }) {
               '—'
             )}
           </Row>
-          <Row label={t.status === 'CAPTURED' ? 'Spent (captured)' : 'Funds held now'}>
+          <Row
+            label={
+              t.status === 'CAPTURED'
+                ? 'Spent (captured)'
+                : ['PARTIALLY_REFUNDED', 'REFUNDED', 'REVERSED'].includes(t.status)
+                  ? 'Spent (after refunds)'
+                  : 'Funds held now'
+            }
+          >
             {formatMoney(t.heldMinor, t.currency)}
           </Row>
           <Row label="Policy version">

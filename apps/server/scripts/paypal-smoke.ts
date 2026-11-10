@@ -2,6 +2,7 @@
  * Live check of the PayPal SANDBOX integration (no money moves, nothing is captured).
  *
  *   npm run paypal:smoke -w @leash/server -- --payee <sandbox business account email>
+ *   npm run paypal:smoke -w @leash/server -- --webhook   # checks PAYPAL_WEBHOOK_ID
  *
  * 1. Gets an OAuth token with PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET (sandbox only).
  * 2. Creates one 1.00 USD order to the given payee, exactly as checkout would.
@@ -12,6 +13,7 @@
 import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 import { ConfigError, parseConfig } from '../src/config/env.js';
+import { PayPalClient } from '../src/modules/payments/paypal/client.js';
 import { paymentProviderFromConfig } from '../src/modules/payments/paypal/checkout.js';
 import { orderRequestId, PaymentProviderError } from '../src/modules/payments/provider.js';
 import { orderMismatches } from '../src/modules/payments/verify.js';
@@ -19,6 +21,56 @@ import { orderMismatches } from '../src/modules/payments/verify.js';
 function line(ok: boolean, label: string, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
   return ok;
+}
+
+/** The events Leash handles (docs/ARCHITECTURE.md §6.4). */
+const WEBHOOK_EVENTS = [
+  'CHECKOUT.ORDER.APPROVED',
+  'PAYMENT.CAPTURE.COMPLETED',
+  'PAYMENT.CAPTURE.PENDING',
+  'PAYMENT.CAPTURE.DENIED',
+  'PAYMENT.CAPTURE.REFUNDED',
+  'PAYMENT.CAPTURE.REVERSED',
+];
+
+/** Reads the configured webhook from PayPal and checks its URL and events. */
+async function webhookSmoke(config: ReturnType<typeof parseConfig>): Promise<number> {
+  const { clientId, clientSecret, webhookId } = config.paypal;
+  if (!clientId || !clientSecret || !webhookId) {
+    console.log(
+      '\nNot configured: set PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET and PAYPAL_WEBHOOK_ID in apps/server/.env.',
+    );
+    return 2;
+  }
+  if (!/^[A-Z0-9]{8,64}$/.test(webhookId)) {
+    line(false, 'PAYPAL_WEBHOOK_ID format', 'expected the ID shown in the developer dashboard');
+    return 1;
+  }
+  try {
+    const client = new PayPalClient({ clientId, clientSecret });
+    const hook = (await client.request('GET', `/v1/notifications/webhooks/${webhookId}`)) as {
+      url?: string;
+      event_types?: { name?: string }[];
+    };
+    const names = new Set((hook.event_types ?? []).map((e) => e.name));
+    let ok = line(true, 'webhook found', hook.url ?? '(no URL)');
+    ok =
+      line(
+        Boolean(hook.url?.endsWith('/api/webhooks/paypal')),
+        'URL ends with /api/webhooks/paypal',
+      ) && ok;
+    const missing = WEBHOOK_EVENTS.filter((e) => !names.has(e) && !names.has('*'));
+    ok =
+      line(missing.length === 0, 'subscribed to the events Leash handles', missing.join(', ')) &&
+      ok;
+    return ok ? 0 : 1;
+  } catch (err) {
+    if (err instanceof PaymentProviderError) {
+      line(false, 'PayPal sandbox request', `${err.kind}: ${err.message}`);
+      return 1;
+    }
+    throw err;
+  }
 }
 
 async function main(): Promise<number> {
@@ -33,6 +85,7 @@ async function main(): Promise<number> {
     throw err;
   }
   console.log(`PayPal environment: ${config.paypal.environment} (${config.paypal.apiBase})`);
+  if (process.argv.includes('--webhook')) return webhookSmoke(config);
   const provider = paymentProviderFromConfig(config);
   if (!provider) {
     console.log(
